@@ -1,13 +1,5 @@
-set(SOURCE_FILES
-    "src/chlorine_sensor.cpp"
-    "src/dht_sensor.cpp"
-    "src/ph_sensor.cpp"
-    "src/tds_sensor.cpp"
-    "src/turbidity_sensor.cpp" 
-)
-
 idf_component_register(
-    SRCS ${SOURCE_FILES}
+    SRCS "src/dht_sensor.cpp"
     INCLUDE_DIRS "inc"
     REQUIRES esp_driver_gpio esp_timer
 )
