@@ -42,12 +42,12 @@ public:
 private:
     
    // class members
-    gpio_num_t _pin;            /// Pin number for the DHT sensor
-    dht_type_t _type;           /// Type of DHT sensor (DHT11 or DHT22)
-    Status _status;             /// Current status of the DHT sensor
-    int64_t _last_read_time;    /// Timestamp of the last successful read
-    DhtData _data;              /// Last read data from the DHT sensor
-    int _consecutive_failures;  /// Count of consecutive failures
+    gpio_num_t _pin;            ///< Pin number for the DHT sensor
+    dht_type_t _type;           ///< Type of DHT sensor (DHT11 or DHT22)
+    Status _status;             ///< Current status of the DHT sensor
+    int64_t _last_read_time;    ///< Timestamp of the last successful read
+    DhtData _data;              ///< Last read data from the DHT sensor
+    int _consecutive_failures;  ///< Count of consecutive failures
 
     constexpr static uint8_t DHT_DATA_LENGTH_BYTES = 5;
     constexpr static uint8_t DHT_DATA_LENGTH_BITS = 40;
