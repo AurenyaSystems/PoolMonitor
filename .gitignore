@@ -19,3 +19,4 @@ sdkconfig
 
 # github
 docs/
+main/secrets.h
