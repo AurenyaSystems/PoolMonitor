@@ -35,7 +35,8 @@ public:
         TIMEOUT_BIT_LOW,
         TIMEOUT_BIT_HIGH,
         NOT_INITIALIZED,
-        SENSOR_NOT_READY
+        SENSOR_NOT_READY,
+        IMPLAUSIBLE_READING   ///< passed checksum but outside the sensor's rated range
     };
 
 
@@ -54,6 +55,18 @@ private:
     constexpr static uint8_t DHT_LOW = 0;
     constexpr static uint8_t DHT_HIGH = 1;
     constexpr static uint8_t kFailedThreshold = 5; // Number of consecutive failures before marking sensor as FAILED
+
+    // Datasheet-rated measurement ranges. These are accuracy-spec bounds, not
+    // physical limits, so a legitimate reading can sit just outside them.
+    constexpr static float kDht11TempMinC =  0.0f;
+    constexpr static float kDht11TempMaxC = 50.0f;
+    constexpr static float kDht11HumMin   = 20.0f;
+    constexpr static float kDht11HumMax   = 90.0f;
+
+    constexpr static float kDht22TempMinC = -40.0f;
+    constexpr static float kDht22TempMaxC =  80.0f;
+    constexpr static float kDht22HumMin   =   0.0f;
+    constexpr static float kDht22HumMax   = 100.0f;
 
 
     // private methods
@@ -90,6 +103,20 @@ private:
      * @param dht_data Reference to a DhtData struct to store the decoded temperature and humidity.
      */
     void decode(uint8_t* data, DhtData& dht_data) const;
+
+    /**
+     * @brief Check a decoded reading against the sensor's rated measurement range.
+     *
+     * The checksum only proves the frame arrived intact, not that the values
+     * are physically meaningful. This catches frames that are well-formed but
+     * out of range, which the DHT can emit on power-up or when the line is
+     * marginal. Ranges are per-type, taken from the respective datasheets.
+     *
+     * @param d Decoded reading to validate.
+     * @return true if temperature and humidity are both within range and
+     *  neither is NaN, false otherwise.
+     */
+    bool is_plausible(const DhtData& d) const;
 
 public:
 
