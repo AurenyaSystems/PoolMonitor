@@ -3,6 +3,13 @@
 #include <esp_timer.h>
 #include <esp_rom_sys.h>
 #include <cstring>
+#include "esp_attr.h"
+
+#include "freertos/FreeRTOS.h"
+
+namespace {
+    portMUX_TYPE dht_mux = portMUX_INITIALIZER_UNLOCKED;
+}
 
 DhtSensor::DhtSensor(gpio_num_t pin, dht_type_t type)
 {
@@ -55,49 +62,82 @@ DhtSensor::ReturnCode DhtSensor::sample()
         }
         return ret;
     }
-    _consecutive_failures = 0;
 
-    decode(data, _data);
-    _data.timestamp = current_time;
+    DhtData candidate {};
+    decode(data, candidate);
+    candidate.timestamp = current_time;
+
+    if (!is_plausible(candidate)) 
+    {
+        if (++_consecutive_failures >= kFailedThreshold) {
+            _status = Status::FAILED;
+        } else {
+            _status = Status::DEGRADED;
+        }
+        return ReturnCode::IMPLAUSIBLE_READING;
+    }
+
+
+    _consecutive_failures = 0;
+    _data = candidate;
     _status = Status::READY;
 
     return ReturnCode::DHT_OK;
 }
 
 
-DhtSensor::ReturnCode DhtSensor::read(uint8_t* data)
+DhtSensor::ReturnCode IRAM_ATTR DhtSensor::read(uint8_t* data)
 {
     memset(data, 0, DHT_DATA_LENGTH_BYTES);
-    // Send start signal
+
+    // Start signal. Deliberately outside the critical section: it is a
+    // millisecond-scale hold and does not need interrupt-level timing.
     gpio_set_level(_pin, 0);
     gpio_set_direction(_pin, GPIO_MODE_OUTPUT);
     esp_rom_delay_us(_type == DHT11 ? 20000 : 1100);
     gpio_set_direction(_pin, GPIO_MODE_INPUT);
 
-    // Wait for sensor response
-    if (!wait_for_level(_pin, DHT_LOW, 300)) return ReturnCode::TIMEOUT_NO_RESPONSE;
-    if (!wait_for_level(_pin, DHT_HIGH, 120)) return ReturnCode::TIMEOUT_RESP_LOW;
-    if (!wait_for_level(_pin, DHT_LOW, 120)) return ReturnCode::TIMEOUT_RESP_HIGH;
+    ReturnCode result = ReturnCode::DHT_OK;
 
-    // line is at low
-    for (int i =0; i < DHT_DATA_LENGTH_BITS; i++) {
-        if (!wait_for_level(_pin, DHT_HIGH, 100)) return ReturnCode::TIMEOUT_BIT_LOW;
-        int64_t start = esp_timer_get_time();
-        if (!wait_for_level(_pin, DHT_LOW, 100)) return ReturnCode::TIMEOUT_BIT_HIGH;
-        int64_t duration = esp_timer_get_time() - start;
+    // The response handshake and 40-bit frame are microsecond-sensitive.
+    // Roughly 5 ms with interrupts disabled, so the calling task must be
+    // pinned to core 1 to keep WiFi (core 0) undisturbed.
+    portENTER_CRITICAL(&dht_mux);
 
-        data[i / 8] <<= 1;
-        if (duration > 48) {
-            data[i / 8] |= 1;
+    if      (!wait_for_level(_pin, DHT_LOW,  300)) result = ReturnCode::TIMEOUT_NO_RESPONSE;
+    else if (!wait_for_level(_pin, DHT_HIGH, 120)) result = ReturnCode::TIMEOUT_RESP_LOW;
+    else if (!wait_for_level(_pin, DHT_LOW,  120)) result = ReturnCode::TIMEOUT_RESP_HIGH;
+    else
+    {
+        for (int i = 0; i < DHT_DATA_LENGTH_BITS; i++) {
+            if (!wait_for_level(_pin, DHT_HIGH, 100)) { result = ReturnCode::TIMEOUT_BIT_LOW;  break; }
+            int64_t start = esp_timer_get_time();
+            if (!wait_for_level(_pin, DHT_LOW, 100))  { result = ReturnCode::TIMEOUT_BIT_HIGH; break; }
+            int64_t duration = esp_timer_get_time() - start;
+
+            data[i / 8] <<= 1;
+            if (duration > 48) {
+                data[i / 8] |= 1;
+            }
         }
     }
 
-    if (checksum(data) != data[4]) return ReturnCode::CHECKSUM_MISMATCH;
-    return ReturnCode::DHT_OK;
+    portEXIT_CRITICAL(&dht_mux);
 
+    if (result != ReturnCode::DHT_OK) return result;
+
+    if (checksum(data) != data[4]) return ReturnCode::CHECKSUM_MISMATCH;
+
+    // An all-zero frame has a valid checksum (0+0+0+0 == 0), so the CRC does
+    // not catch it. The DHT emits one on power-up before its first conversion.
+    if (data[0] == 0 && data[1] == 0 && data[2] == 0 && data[3] == 0) {
+        return ReturnCode::IMPLAUSIBLE_READING;
+    }
+
+    return ReturnCode::DHT_OK;
 }
 
-bool DhtSensor::wait_for_level(gpio_num_t pin, int level, uint32_t timeout_us) 
+bool IRAM_ATTR DhtSensor::wait_for_level(gpio_num_t pin, int level, uint32_t timeout_us)
 {
     int64_t start = esp_timer_get_time();
     while (gpio_get_level(pin) != level) {
@@ -127,4 +167,27 @@ void DhtSensor::decode(uint8_t* data, DhtSensor::DhtData& dht_data) const
             }
             break;
     }
+}
+
+bool DhtSensor::is_plausible(const DhtData& d) const
+{
+    if (std::isnan(d.temperature) || std::isnan(d.humidity)) return false;
+
+    float t_min, t_max, h_min, h_max;
+
+    switch (_type) {
+        case DHT11:
+            t_min = kDht11TempMinC; t_max = kDht11TempMaxC;
+            h_min = kDht11HumMin;   h_max = kDht11HumMax;
+            break;
+        case DHT22:
+        default:
+            t_min = kDht22TempMinC; t_max = kDht22TempMaxC;
+            h_min = kDht22HumMin;   h_max = kDht22HumMax;
+            break;
+    }
+
+    if (d.temperature < t_min || d.temperature > t_max) return false;
+    if (d.humidity    < h_min || d.humidity    > h_max) return false;
+    return true;
 }
