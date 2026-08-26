@@ -90,7 +90,7 @@ MqttClient::ReturnCode MqttClient::init()
     cfg.session.last_will.qos         = 1;
     cfg.session.last_will.retain      = true;
     cfg.session.disable_clean_session = true;   // persistent session
-    cfg.session.keepalive             = 60;
+    cfg.session.keepalive             = 300;
 
     _client = esp_mqtt_client_init(&cfg);
     if (!_client)

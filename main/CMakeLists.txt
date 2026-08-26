@@ -1,5 +1,10 @@
-idf_component_register(SRCS "main.cpp"
-                    PRIV_REQUIRES spi_flash
-                    REQUIRES drivers core 
-                    PRIV_REQUIRES nvs_flash esp_netif
-                    INCLUDE_DIRS ".")
+idf_component_register(
+    SRCS "main.cpp"
+    INCLUDE_DIRS "."
+    REQUIRES
+        drivers
+        nvs_flash
+        esp_netif
+        esp_event
+        esp_pm
+)
