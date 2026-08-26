@@ -73,6 +73,18 @@ public:
      */
     bool has_ip() const;
 
+    /**
+     * @brief Enable or disable WiFi modem sleep.
+     *
+     * With modem sleep the radio powers down between AP beacons and wakes to
+     * check for buffered traffic. The association is maintained throughout,
+     * so this is transparent to anything using the connection.
+     *
+     * @param enable true for max modem sleep, false for no power save.
+     * @return ReturnCode indicating the result of the operation
+     */
+    ReturnCode set_power_save(bool enable);
+
     Wifi(const Wifi&) = delete;
     Wifi& operator=(const Wifi&) = delete;
 

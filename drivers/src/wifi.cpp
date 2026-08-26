@@ -154,3 +154,15 @@ bool Wifi::has_ip() const
 }
 
 
+Wifi::ReturnCode Wifi::set_power_save(bool enable)
+{
+    if (_status == Status::UNINITIALIZED) { return ReturnCode::NOT_INITIALIZED; }
+
+    esp_err_t err = esp_wifi_set_ps(enable ? WIFI_PS_MAX_MODEM : WIFI_PS_NONE);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "set power save failed: %s", esp_err_to_name(err));
+        return ReturnCode::INTERNAL_ERROR;
+    }
+    ESP_LOGI(TAG, "modem sleep %s", enable ? "enabled" : "disabled");
+    return ReturnCode::OK;
+}
