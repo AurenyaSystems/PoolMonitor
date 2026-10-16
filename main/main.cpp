@@ -17,6 +17,7 @@
 #include "esp_netif.h"
 #include "esp_pm.h"
 #include "esp_mac.h"
+#include "esp_app_desc.h"
 
 #include <cstdio>
 
@@ -121,10 +122,12 @@ extern "C" void app_main() {
     char telemetry_topic[96];
     char cmd_topic[96];
     char cmd_response_topic[96];
+    char sysinfo_prefix[96];
     snprintf(status_topic, sizeof(status_topic), "pool/%s/status", device_id);
     snprintf(telemetry_topic, sizeof(telemetry_topic), "pool/%s/telemetry", device_id);
     snprintf(cmd_topic, sizeof(cmd_topic), "pool/%s/cmd", device_id);
     snprintf(cmd_response_topic, sizeof(cmd_response_topic), "pool/%s/cmd/response", device_id);
+    snprintf(sysinfo_prefix, sizeof(sysinfo_prefix), "pool/%s/sysinfo", device_id);
 
     MqttClient mqtt(MQTT_BROKER_URI, device_id);
     auto mrc = mqtt.init();
@@ -136,6 +139,7 @@ extern "C" void app_main() {
     if (mrc == MqttClient::ReturnCode::OK) {
         ESP_LOGI("main", "mqtt connected");
         mqtt.publish(status_topic, "online", 1, true);
+        publish_sysinfo(&mqtt, sysinfo_prefix, "version", esp_app_get_description()->version);
     } else {
         ESP_LOGW("main", "mqtt not connected, rc=%d", static_cast<int>(mrc));
     }
@@ -204,22 +208,22 @@ extern "C" void app_main() {
     // Samplers run on core 1 like this task: the DHT and 1-Wire bit loops
     // disable interrupts briefly and must stay off the WiFi core (0).
     // Their args live on this stack, which is fine since run_transmitter never returns.
-    SamplerArgs<DhtSensor> dht_args { &dht, &queue, DHT_INTERVAL_MS };
+    SamplerArgs<DhtSensor> dht_args { &dht, &queue, DHT_INTERVAL_MS, &mqtt, sysinfo_prefix };
     xTaskCreatePinnedToCore(dht_sampler_task, "dht", 4096, &dht_args, 5, nullptr, 1);
 
-    SamplerArgs<Ds18b20> water_args { &water, &queue, WATER_INTERVAL_MS };
+    SamplerArgs<Ds18b20> water_args { &water, &queue, WATER_INTERVAL_MS, &mqtt, sysinfo_prefix };
     if (water.get_status() != Ds18b20::Status::UNINITIALIZED) {
         xTaskCreatePinnedToCore(water_sampler_task, "water", 4096, &water_args, 5, nullptr, 1);
     }
 
     // pH gets the water probe for temperature compensation, if there is one
     Ds18b20* ph_water = (water.get_status() != Ds18b20::Status::UNINITIALIZED) ? &water : nullptr;
-    EzoSamplerArgs ph_args { &ph, &queue, PH_INTERVAL_MS, "PH", ph_water };
+    EzoSamplerArgs ph_args { &ph, &queue, PH_INTERVAL_MS, "PH", ph_water, &mqtt, sysinfo_prefix };
     if (ph.get_status() != EzoSensor::Status::UNINITIALIZED) {
         xTaskCreatePinnedToCore(ezo_sampler_task, "ph", 4096, &ph_args, 5, nullptr, 1);
     }
 
-    EzoSamplerArgs orp_args { &orp, &queue, ORP_INTERVAL_MS, "ORP", nullptr };
+    EzoSamplerArgs orp_args { &orp, &queue, ORP_INTERVAL_MS, "ORP", nullptr, &mqtt, sysinfo_prefix };
     if (orp.get_status() != EzoSensor::Status::UNINITIALIZED) {
         xTaskCreatePinnedToCore(ezo_sampler_task, "orp", 4096, &orp_args, 5, nullptr, 1);
     }
@@ -235,6 +239,7 @@ extern "C" void app_main() {
         &mqtt,
         &queue,
         &seq,
+        sysinfo_prefix,
     };
     Cli cli(targets);
     cli.start_console();

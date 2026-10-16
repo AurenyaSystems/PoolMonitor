@@ -120,6 +120,7 @@ public:
 
     EzoData read_data() const { return _data; }
     Status get_status() const { return _status; }
+    int get_consecutive_failures() const { return _consecutive_failures; }
     uint8_t get_address() const { return _address; }
 
     EzoSensor(const EzoSensor&) = delete;

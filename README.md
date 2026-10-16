@@ -53,6 +53,15 @@ Power: automatic light sleep plus WiFi modem sleep, configured in `sdkconfig.def
 | `pool/<device_id>/status` | 1 | yes | `online` / `offline` (LWT) |
 | `pool/<device_id>/cmd` | 1 | no | one console command as plain text, e.g. `ph cal mid 7.00` (provisional) |
 | `pool/<device_id>/cmd/response` | 1 | no | the command's reply, plain text |
+| `pool/<device_id>/sysinfo/<leaf>` | 1 | yes | latest device state, one leaf per item (below) |
+
+`sysinfo` leaves published today:
+
+| Leaf | When | Payload |
+|---|---|---|
+| `version` | at boot | the firmware version string (`git describe`) |
+| `sensor_status/<ID>` | when a sensor's status changes | `{"status":"DEGRADED","consecutive":3,"severity":"warn"}` with severity `ok` / `warn` / `error` |
+| `calibration/<ID>` | after a successful `cal` command | `{"ts":1760640000,"cmd":"mid,7.00","points":1}`; `ts` is omitted if the clock isn't synced |
 
 - **One message per reading.**
 - **Units:** SI, except ORP in mV. No units in the payload; the server maps IDs to units.

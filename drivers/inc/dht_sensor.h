@@ -150,6 +150,8 @@ public:
      */
     Status get_status() const {return _status;};
 
+    int get_consecutive_failures() const { return _consecutive_failures; }
+
     DhtSensor(const DhtSensor&) = delete;
     DhtSensor& operator=(const DhtSensor&) = delete;
 };

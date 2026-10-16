@@ -20,6 +20,35 @@
 // time, which leaves room to stagger power use once POOL-44 has numbers.
 
 /**
+ * @brief Name of a driver Status value.
+ *
+ * Every driver's Status enum has the same four values in the same order, so
+ * one table serves them all.
+ */
+template <typename S>
+inline const char* status_name(S s)
+{
+    static const char* NAMES[] = { "UNINITIALIZED", "READY", "DEGRADED", "FAILED" };
+    int i = static_cast<int>(s);
+    return (i >= 0 && i < 4) ? NAMES[i] : "?";
+}
+
+/**
+ * @brief Publish a device-state leaf: pool/<device_id>/sysinfo/<leaf>.
+ *
+ * Retained, so the server sees the latest value even after its own restart.
+ * The server stores any leaf without a schema change, so new state just needs
+ * a new leaf name.
+ *
+ * @param mqtt Client, may be null (returns false)
+ * @param prefix "pool/<device_id>/sysinfo"
+ * @param leaf e.g. "sensor_status/PH" or "version"
+ * @param payload Text or JSON
+ * @return true if the publish was accepted
+ */
+bool publish_sysinfo(MqttClient* mqtt, const char* prefix, const char* leaf, const char* payload);
+
+/**
  * @brief One raw reading, as it will be published (POOL-38).
  */
 struct Reading
@@ -105,6 +134,8 @@ struct SamplerArgs
     Sensor* sensor;
     ReadingQueue* queue;
     uint32_t interval_ms;
+    MqttClient* mqtt;           ///< for sensor_status leaves, may be null
+    const char* sysinfo_prefix; ///< "pool/<device_id>/sysinfo"
 };
 
 /**
@@ -117,6 +148,8 @@ struct EzoSamplerArgs
     uint32_t interval_ms;
     const char* id;             ///< sensor ID to publish under, "PH" or "ORP"
     Ds18b20* water;             ///< water probe for temperature compensation, or nullptr
+    MqttClient* mqtt;           ///< for sensor_status leaves, may be null
+    const char* sysinfo_prefix; ///< "pool/<device_id>/sysinfo"
 };
 
 /**

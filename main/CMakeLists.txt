@@ -8,4 +8,5 @@ idf_component_register(
         esp_netif
         esp_event
         esp_pm
+        esp_app_format
 )
