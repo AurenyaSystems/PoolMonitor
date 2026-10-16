@@ -7,6 +7,11 @@
 #   test/host/run.sh cli        run one (onewire_ds18b20 | ezo_sensor | cli)
 set -euo pipefail
 cd "$(dirname "$0")"
+
+# An ESP-IDF-activated shell (idf.py export, the VS Code ESP-IDF terminal) puts
+# the Xtensa binutils first in PATH, and the host g++ then picks up the wrong
+# `as`. Put the system toolchain back in front.
+export PATH="/usr/bin:/usr/local/bin:$PATH"
 R=../..
 OUT=build
 mkdir -p "$OUT"
