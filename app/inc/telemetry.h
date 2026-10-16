@@ -8,6 +8,7 @@
 
 #include "dht_sensor.h"
 #include "ds18b20.h"
+#include "ezo_sensor.h"
 #include "mqtt.h"
 #include "seq_counter.h"
 
@@ -83,6 +84,18 @@ struct SamplerArgs
 };
 
 /**
+ * @brief Arguments for an EZO sampler task. Must outlive the task.
+ */
+struct EzoSamplerArgs
+{
+    EzoSensor* sensor;
+    ReadingQueue* queue;
+    uint32_t interval_ms;
+    const char* id;             ///< sensor ID to publish under, "PH" or "ORP"
+    Ds18b20* water;             ///< water probe for temperature compensation, or nullptr
+};
+
+/**
  * @brief FreeRTOS task: sample the DHT every interval_ms, queue ENC_T and ENC_RH.
  * @param arg SamplerArgs<DhtSensor>*
  */
@@ -93,6 +106,16 @@ void dht_sampler_task(void* arg);
  * @param arg SamplerArgs<Ds18b20>*
  */
 void water_sampler_task(void* arg);
+
+/**
+ * @brief FreeRTOS task: sample an EZO stamp every interval_ms, queue it under args->id.
+ *
+ * If a water probe is given, its last good temperature is sent to the stamp
+ * before each reading for compensation (pH).
+ *
+ * @param arg EzoSamplerArgs*
+ */
+void ezo_sampler_task(void* arg);
 
 /**
  * @brief Drain the queue to MQTT every interval_ms. Never returns.
