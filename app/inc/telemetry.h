@@ -5,6 +5,7 @@
 #include <stddef.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
+#include "freertos/semphr.h"
 
 #include "dht_sensor.h"
 #include "ds18b20.h"
@@ -68,8 +69,31 @@ public:
      */
     bool pop(Reading& out);
 
+    size_t count() const;                               ///< readings waiting
+    uint32_t get_dropped() const { return _dropped; }   ///< readings dropped since boot
+
     ReadingQueue(const ReadingQueue&) = delete;
     ReadingQueue& operator=(const ReadingQueue&) = delete;
+};
+
+/**
+ * @brief Serialises access to the sensors between the samplers and the CLI.
+ *
+ * Each driver is a multi-step bus conversation (write, wait, read), so two
+ * tasks talking to the same bus at once would corrupt both. One lock for all
+ * sensors keeps it simple; a command waits at most one sample (~1 s).
+ *
+ * Usage: `SensorLock lock;` at the top of a scope that touches a sensor.
+ */
+class SensorLock
+{
+private:
+    static SemaphoreHandle_t _mutex;
+public:
+    SensorLock();
+    ~SensorLock();
+    SensorLock(const SensorLock&) = delete;
+    SensorLock& operator=(const SensorLock&) = delete;
 };
 
 /**

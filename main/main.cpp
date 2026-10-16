@@ -2,6 +2,7 @@
 
 //app
 #include "telemetry.h"
+#include "cli_class.h"
 
 //drivers
 #include "dht_sensor.h"
@@ -22,6 +23,25 @@
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+
+// Server commands (POOL-6): the cmd topic carries a CLI line, the reply goes
+// to cmd/response as text. Same dispatcher as the UART console.
+struct CmdContext
+{
+    Cli* cli;
+    MqttClient* mqtt;
+    const char* response_topic;
+};
+
+static void on_cmd(void* arg, const char* topic, const char* data, int)
+{
+    auto* ctx = static_cast<CmdContext*>(arg);
+    ESP_LOGI("cmd", "%s: %s", topic, data);
+
+    char reply[Cli::MAX_REPLY];
+    ctx->cli->execute(data, reply, sizeof(reply));
+    ctx->mqtt->publish(ctx->response_topic, reply, 1, false);
+}
 
 // LAN-only setups can point this at the router or broker host in secrets.h
 #ifndef SNTP_SERVER
@@ -99,8 +119,12 @@ extern "C" void app_main() {
 
     char status_topic[96];
     char telemetry_topic[96];
+    char cmd_topic[96];
+    char cmd_response_topic[96];
     snprintf(status_topic, sizeof(status_topic), "pool/%s/status", device_id);
     snprintf(telemetry_topic, sizeof(telemetry_topic), "pool/%s/telemetry", device_id);
+    snprintf(cmd_topic, sizeof(cmd_topic), "pool/%s/cmd", device_id);
+    snprintf(cmd_response_topic, sizeof(cmd_response_topic), "pool/%s/cmd/response", device_id);
 
     MqttClient mqtt(MQTT_BROKER_URI, device_id);
     auto mrc = mqtt.init();
@@ -199,6 +223,25 @@ extern "C" void app_main() {
     if (orp.get_status() != EzoSensor::Status::UNINITIALIZED) {
         xTaskCreatePinnedToCore(ezo_sampler_task, "orp", 4096, &orp_args, 5, nullptr, 1);
     }
+
+    // CLI (POOL-6): UART console for the bench, and the same commands over
+    // MQTT cmd for the server. Null targets answer "not present".
+    Cli::Targets targets = {
+        &dht,
+        (water.get_status() != Ds18b20::Status::UNINITIALIZED) ? &water : nullptr,
+        &ph,
+        &orp,
+        &wifi,
+        &mqtt,
+        &queue,
+        &seq,
+    };
+    Cli cli(targets);
+    cli.start_console();
+
+    CmdContext cmd_ctx { &cli, &mqtt, cmd_response_topic };
+    mqtt.set_message_handler(on_cmd, &cmd_ctx);
+    mqtt.subscribe(cmd_topic);
 
     run_transmitter(queue, mqtt, seq, telemetry_topic, TX_INTERVAL_MS);
 }

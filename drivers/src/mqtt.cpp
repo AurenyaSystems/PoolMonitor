@@ -14,7 +14,9 @@ namespace {
 MqttClient::MqttClient(const char* broker_uri, const char* device_id):
     _client(nullptr),
     _events(nullptr),
-    _status(Status::UNINITIALIZED)
+    _status(Status::UNINITIALIZED),
+    _on_message(nullptr),
+    _on_message_arg(nullptr)
 {
     if (broker_uri) { strncpy(_broker_uri, broker_uri, sizeof(_broker_uri) - 1); }
     if (device_id)  { strncpy(_device_id,  device_id,  sizeof(_device_id)  - 1); }
@@ -33,7 +35,38 @@ void MqttClient::event_handler(void* arg, esp_event_base_t /*event_base*/,
             self->_status = Status::READY;
             xEventGroupClearBits(self->_events, MQTT_FAILED_BIT);
             xEventGroupSetBits(self->_events, MQTT_CONNECTED_BIT);
+
+            // The persistent session keeps the subscription broker-side, but
+            // re-sending it is cheap and covers a broker that lost the session
+            if (self->_sub_topic[0] != '\0')
+            {
+                auto handle = static_cast<esp_mqtt_client_handle_t>(self->_client);
+                if (esp_mqtt_client_subscribe(handle, self->_sub_topic, 1) < 0) {
+                    ESP_LOGW(TAG, "subscribe %s failed", self->_sub_topic);
+                }
+            }
             break;
+
+        case MQTT_EVENT_DATA:
+        {
+            // Fragments of an oversized message come as several events; we
+            // only ever expect short commands, so drop anything fragmented
+            if (ev->current_data_offset != 0 || ev->data_len != ev->total_data_len)
+            {
+                ESP_LOGW(TAG, "dropping fragmented message on %.*s", ev->topic_len, ev->topic);
+                break;
+            }
+            if (!self->_on_message) { break; }
+
+            char topic[96];
+            char data[256];
+            snprintf(topic, sizeof(topic), "%.*s", ev->topic_len, ev->topic);
+            int n = ev->data_len < static_cast<int>(sizeof(data)) - 1 ? ev->data_len : static_cast<int>(sizeof(data)) - 1;
+            memcpy(data, ev->data, n);
+            data[n] = '\0';
+            self->_on_message(self->_on_message_arg, topic, data, n);
+            break;
+        }
 
         case MQTT_EVENT_DISCONNECTED:
             ESP_LOGW(TAG, "disconnected from broker");
@@ -160,6 +193,33 @@ MqttClient::ReturnCode MqttClient::publish(const char* topic, const char* payloa
         return ReturnCode::PUBLISH_FAILED;
     }
     return ReturnCode::OK;
+}
+
+MqttClient::ReturnCode MqttClient::subscribe(const char* topic, int qos)
+{
+    if (!_client) { return ReturnCode::NOT_INITIALIZED; }
+    if (!topic || !topic[0]) { return ReturnCode::INVALID_ARG; }
+
+    strncpy(_sub_topic, topic, sizeof(_sub_topic) - 1);
+    _sub_topic[sizeof(_sub_topic) - 1] = '\0';
+
+    // If not connected yet, the CONNECTED event sends it
+    if (!is_connected()) { return ReturnCode::OK; }
+
+    auto handle = static_cast<esp_mqtt_client_handle_t>(_client);
+    if (esp_mqtt_client_subscribe(handle, _sub_topic, qos) < 0)
+    {
+        ESP_LOGE(TAG, "subscribe %s failed", _sub_topic);
+        return ReturnCode::INTERNAL_ERROR;
+    }
+    ESP_LOGI(TAG, "subscribed to %s", _sub_topic);
+    return ReturnCode::OK;
+}
+
+void MqttClient::set_message_handler(MessageHandler handler, void* arg)
+{
+    _on_message = handler;
+    _on_message_arg = arg;
 }
 
 bool MqttClient::is_connected() const

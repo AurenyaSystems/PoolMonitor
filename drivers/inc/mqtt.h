@@ -26,12 +26,24 @@ private:
     char _broker_uri[128] {};   ///< e.g. mqtt://192.168.4.47:1883
     char _device_id[32]   {};   ///< topic prefix and client id
     char _topic_buf[96]   {};   ///< scratch for building topic strings
+    char _sub_topic[96]   {};   ///< the one topic we subscribe to, re-sent on every connect
 
     void* _client;              ///< esp_mqtt_client_handle_t, opaque here
     EventGroupHandle_t _events; ///< connection state bits
     Status _status;
 
     constexpr static const char* TAG = "[MQTT]";
+
+public:
+    /**
+     * @brief Called from the MQTT task for every message on a subscribed topic.
+     * topic and data are NUL-terminated copies; data_len excludes the NUL.
+     */
+    typedef void (*MessageHandler)(void* arg, const char* topic, const char* data, int data_len);
+
+private:
+    MessageHandler _on_message;
+    void* _on_message_arg;
 
     static void event_handler(void* arg, esp_event_base_t event_base,
                               int32_t event_id, void* event_data);
@@ -69,6 +81,30 @@ public:
      * @return ReturnCode indicating the result of the operation
      */
     ReturnCode publish(const char* topic, const char* payload, int qos = 1, bool retain = false);
+
+    /**
+     * @brief Subscribe to a topic, now and again after every reconnect.
+     *
+     * One topic only, which is all the device needs (its cmd topic). Calling
+     * it again replaces the previous one.
+     *
+     * @param topic Full topic string
+     * @param qos Quality of service (0, 1, or 2)
+     * @return ReturnCode indicating the result of the operation
+     */
+    ReturnCode subscribe(const char* topic, int qos = 1);
+
+    /**
+     * @brief Set the handler for messages on the subscribed topic.
+     *
+     * The handler runs in the MQTT task, so it should return promptly. Messages
+     * larger than the client's receive buffer arrive fragmented and are dropped;
+     * commands are far smaller than that.
+     *
+     * @param handler Callback, or nullptr to clear
+     * @param arg Passed through to the callback
+     */
+    void set_message_handler(MessageHandler handler, void* arg);
 
     /**
      * @brief Check whether the client is currently connected to the broker
