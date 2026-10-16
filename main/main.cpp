@@ -156,13 +156,20 @@ extern "C" void app_main() {
     EzoSensor ph(i2c_bus, EZO_PH_ADDR, 0.0f, 14.0f);
     ph.init();
 
+    // ORP stamp (POOL-11): range is the EZO-ORP measurement range, in mV.
+    // No temperature compensation; ORP stamps don't take one.
+    constexpr uint8_t EZO_ORP_ADDR = 0x62;
+    EzoSensor orp(i2c_bus, EZO_ORP_ADDR, -1019.9f, 1019.9f);
+    orp.init();
+
     // telemetry (POOL-36): each sensor samples on its own interval and queues
     // readings; this task drains the queue to MQTT on its own cadence.
     constexpr const uint32_t DHT_INTERVAL_MS   = 30 * 60 * 1000;
     constexpr const uint32_t WATER_INTERVAL_MS = 30 * 60 * 1000;
     constexpr const uint32_t PH_INTERVAL_MS    = 30 * 60 * 1000;
+    constexpr const uint32_t ORP_INTERVAL_MS   = 30 * 60 * 1000;
     constexpr const uint32_t TX_INTERVAL_MS    = 60 * 1000;
-    constexpr const size_t   QUEUE_DEPTH       = 32;    // ~5 h of readings at these intervals if the broker is down
+    constexpr const size_t   QUEUE_DEPTH       = 64;    // ~6 h of readings at these intervals if the broker is down
 
     ReadingQueue queue;
     if (!queue.init(QUEUE_DEPTH)) { return; }
@@ -186,6 +193,11 @@ extern "C" void app_main() {
     EzoSamplerArgs ph_args { &ph, &queue, PH_INTERVAL_MS, "PH", ph_water };
     if (ph.get_status() != EzoSensor::Status::UNINITIALIZED) {
         xTaskCreatePinnedToCore(ezo_sampler_task, "ph", 4096, &ph_args, 5, nullptr, 1);
+    }
+
+    EzoSamplerArgs orp_args { &orp, &queue, ORP_INTERVAL_MS, "ORP", nullptr };
+    if (orp.get_status() != EzoSensor::Status::UNINITIALIZED) {
+        xTaskCreatePinnedToCore(ezo_sampler_task, "orp", 4096, &orp_args, 5, nullptr, 1);
     }
 
     run_transmitter(queue, mqtt, seq, telemetry_topic, TX_INTERVAL_MS);
