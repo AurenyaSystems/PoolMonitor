@@ -4,6 +4,7 @@
 #include "dht_sensor.h"
 #include "wifi.h"
 #include "mqtt.h"
+#include "ds18b20.h"
 
 #include "nvs_flash.h"
 #include "esp_netif.h"
@@ -85,6 +86,23 @@ extern "C" void app_main() {
     DhtSensor dht(GPIO_NUM_4, DhtSensor::DHT22);
     ESP_ERROR_CHECK(dht.init());
 
+    // water temperature: one DS18B20 on its own 1-Wire bus (POOL-9)
+    constexpr gpio_num_t ONEWIRE_PIN = GPIO_NUM_27;
+    OneWire onewire(ONEWIRE_PIN);
+    ESP_ERROR_CHECK(onewire.init());
+
+    // Find the probe's ROM ID instead of hardcoding it, so a swapped probe
+    // needs no reflash. If none is found, rom stays 0 and init() fails, which
+    // leaves the sensor skipped in the loop.
+    uint64_t rom = 0;
+    if (onewire.search(&rom, 1) == 1) {
+        ESP_LOGI("ds18b20", "probe on GPIO %d: ROM %016llX", ONEWIRE_PIN, rom);
+    } else {
+        ESP_LOGE("ds18b20", "no probe found on GPIO %d", ONEWIRE_PIN);
+    }
+    Ds18b20 water(onewire, rom);
+    water.init();
+
     uint32_t seq = 0;
     char payload[128];
 
@@ -110,6 +128,24 @@ extern "C" void app_main() {
             }
         } else {
             ESP_LOGW("dht", "sample failed, rc=%d", static_cast<int>(drc));
+        }
+
+        if (water.get_status() != Ds18b20::Status::UNINITIALIZED) {
+            auto wrc = water.sample();
+
+            if (wrc == Ds18b20::ReturnCode::OK) {
+                auto w = water.read_data();
+                ESP_LOGI("ds18b20", "water %.2f C (%.1f F)", w.temperature, c_to_f(w.temperature));
+
+                snprintf(payload, sizeof(payload),
+                         "{\"schema\":1,\"seq\":%lu,\"id\":\"WATER_T\",\"v\":%.2f}",
+                         seq++, w.temperature);
+                if (mqtt.publish(telemetry_topic, payload) != MqttClient::ReturnCode::OK) {
+                    ESP_LOGW("main", "publish WATER_T failed");
+                }
+            } else {
+                ESP_LOGW("ds18b20", "sample failed, rc=%d", static_cast<int>(wrc));
+            }
         }
 
         vTaskDelay(pdMS_TO_TICKS(DHT_READ_INTERVAL_MS));

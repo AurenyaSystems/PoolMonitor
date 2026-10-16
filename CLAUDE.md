@@ -29,7 +29,7 @@ This is a home project, not a product. Keep it simple.
 ## Coding style (match `drivers/` on main)
 
 - Files are `snake_case`, with headers in `inc/` and sources in `src/`. Use `#ifndef FOO_H` include guards. Don't use `#pragma once`, except in `secrets.h`.
-- Classes are `PascalCase` (`DhtSensor`, `MqttClient`), and methods and free functions are `snake_case` (`wait_for_connection`, `read_data`). The old `core/onewire` uses camelCase and predates this.
+- Classes are `PascalCase` (`DhtSensor`, `MqttClient`), and methods and free functions are `snake_case` (`wait_for_connection`, `read_data`).
 - Private members get a leading underscore (`_pin`, `_status`).
 - A driver class usually has:
   - a constructor that only stores arguments, and a separate `init()`
