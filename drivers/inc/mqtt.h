@@ -30,7 +30,6 @@ private:
     void* _client;              ///< esp_mqtt_client_handle_t, opaque here
     EventGroupHandle_t _events; ///< connection state bits
     Status _status;
-    uint32_t _seq;              ///< monotonic, RAM-only for now (POOL-38 wants NVS)
 
     constexpr static const char* TAG = "[MQTT]";
 
