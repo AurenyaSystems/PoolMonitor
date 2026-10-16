@@ -86,23 +86,21 @@ extern "C" void app_main() {
     DhtSensor dht(GPIO_NUM_4, DhtSensor::DHT22);
     ESP_ERROR_CHECK(dht.init());
 
-    // water temperature: DS18B20 probes sharing one 1-Wire bus (POOL-9)
+    // water temperature: one DS18B20 on its own 1-Wire bus (POOL-9)
     constexpr gpio_num_t ONEWIRE_PIN = GPIO_NUM_27;
-    constexpr int MAX_WATER_PROBES = 2;
     OneWire onewire(ONEWIRE_PIN);
     ESP_ERROR_CHECK(onewire.init());
 
-    uint64_t roms[MAX_WATER_PROBES] = {};
-    int probe_count = onewire.search(roms, MAX_WATER_PROBES);
-    ESP_LOGI("ds18b20", "found %d probe(s) on GPIO %d", probe_count, ONEWIRE_PIN);
-    for (int i = 0; i < probe_count; i++) {
-        ESP_LOGI("ds18b20", "  probe %d: ROM %016llX", i, roms[i]);
+    // Find the probe's ROM ID instead of hardcoding it, so a swapped probe
+    // needs no reflash. If none is found, rom stays 0 and init() fails, which
+    // leaves the sensor skipped in the loop.
+    uint64_t rom = 0;
+    if (onewire.search(&rom, 1) == 1) {
+        ESP_LOGI("ds18b20", "probe on GPIO %d: ROM %016llX", ONEWIRE_PIN, rom);
+    } else {
+        ESP_LOGE("ds18b20", "no probe found on GPIO %d", ONEWIRE_PIN);
     }
-
-    // Only the first probe is published for now; search order is by ROM ID,
-    // so it stays the same probe across reboots. If none was found, roms[0]
-    // is 0 and init() fails, which leaves the sensor skipped in the loop.
-    Ds18b20 water(onewire, roms[0]);
+    Ds18b20 water(onewire, rom);
     water.init();
 
     uint32_t seq = 0;
