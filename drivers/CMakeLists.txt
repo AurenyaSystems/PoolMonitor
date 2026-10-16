@@ -4,6 +4,7 @@ idf_component_register(
         "src/wifi.cpp"
         "src/mqtt.cpp"
         "src/ds18b20.cpp"
+        "src/time_sync.cpp"
     INCLUDE_DIRS "inc"
     REQUIRES
         esp_driver_gpio
@@ -14,4 +15,5 @@ idf_component_register(
         esp_wifi
         esp_netif
         mqtt
+        lwip
 )

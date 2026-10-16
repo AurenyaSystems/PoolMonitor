@@ -5,16 +5,23 @@
 #include "wifi.h"
 #include "mqtt.h"
 #include "ds18b20.h"
+#include "time_sync.h"
 
 #include "nvs_flash.h"
 #include "esp_netif.h"
 #include "esp_pm.h"
 
 #include <cstdio>
+#include <ctime>
 
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+
+// LAN-only setups can point this at the router or broker host in secrets.h
+#ifndef SNTP_SERVER
+#define SNTP_SERVER "pool.ntp.org"
+#endif
 
 constexpr float c_to_f(float c) { return c * 9.0f / 5.0f + 32.0f; }
 
@@ -46,6 +53,13 @@ extern "C" void app_main() {
         ESP_LOGI("main", "wifi connected");
     } else {
         ESP_LOGW("main", "wifi not connected, rc=%d", static_cast<int>(rc));
+    }
+
+    // time: publishing is held until SNTP has set the clock (POOL-37). If the
+    // first sync misses this window, SNTP keeps retrying in the background.
+    constexpr const int TIME_SYNC_TIMEOUT_MS = 10000;
+    if (time_sync_start(SNTP_SERVER) == ESP_OK && !time_sync_wait(TIME_SYNC_TIMEOUT_MS)) {
+        ESP_LOGW("main", "time not synced yet, readings held until it is");
     }
 
     // power management: automatic light sleep when idle.
@@ -106,25 +120,34 @@ extern "C" void app_main() {
     uint32_t seq = 0;
     char payload[128];
 
+    // One flat message per reading (POOL-38); ts is when the reading was taken
+    auto publish_reading = [&](const char* id, time_t ts, float v) {
+        snprintf(payload, sizeof(payload),
+                 "{\"schema\":1,\"seq\":%lu,\"id\":\"%s\",\"ts\":%lld,\"v\":%.2f}",
+                 seq++, id, static_cast<long long>(ts), v);
+        if (mqtt.publish(telemetry_topic, payload) != MqttClient::ReturnCode::OK) {
+            ESP_LOGW("main", "publish %s failed", id);
+        }
+    };
+
     while (true) {
+        // A reading with a bogus epoch looks valid downstream; a held one is
+        // just a gap. Sensors are still sampled so their health stays current.
+        bool time_ok = time_is_synced();
+        if (!time_ok) {
+            ESP_LOGW("main", "time not synced, holding readings");
+        }
+
         auto drc = dht.sample();
+        time_t ts = time(nullptr);
 
         if (drc == DhtSensor::ReturnCode::DHT_OK) {
             auto d = dht.read_data();
             ESP_LOGI("dht", "%.1f F  %.1f %%RH", c_to_f(d.temperature), d.humidity);
 
-            snprintf(payload, sizeof(payload),
-                     "{\"schema\":1,\"seq\":%lu,\"id\":\"ENC_T\",\"v\":%.2f}",
-                     seq++, d.temperature);
-            if (mqtt.publish(telemetry_topic, payload) != MqttClient::ReturnCode::OK) {
-                ESP_LOGW("main", "publish ENC_T failed");
-            }
-
-            snprintf(payload, sizeof(payload),
-                     "{\"schema\":1,\"seq\":%lu,\"id\":\"ENC_RH\",\"v\":%.2f}",
-                     seq++, d.humidity);
-            if (mqtt.publish(telemetry_topic, payload) != MqttClient::ReturnCode::OK) {
-                ESP_LOGW("main", "publish ENC_RH failed");
+            if (time_ok) {
+                publish_reading("ENC_T", ts, d.temperature);
+                publish_reading("ENC_RH", ts, d.humidity);
             }
         } else {
             ESP_LOGW("dht", "sample failed, rc=%d", static_cast<int>(drc));
@@ -132,16 +155,14 @@ extern "C" void app_main() {
 
         if (water.get_status() != Ds18b20::Status::UNINITIALIZED) {
             auto wrc = water.sample();
+            ts = time(nullptr);
 
             if (wrc == Ds18b20::ReturnCode::OK) {
                 auto w = water.read_data();
                 ESP_LOGI("ds18b20", "water %.2f C (%.1f F)", w.temperature, c_to_f(w.temperature));
 
-                snprintf(payload, sizeof(payload),
-                         "{\"schema\":1,\"seq\":%lu,\"id\":\"WATER_T\",\"v\":%.2f}",
-                         seq++, w.temperature);
-                if (mqtt.publish(telemetry_topic, payload) != MqttClient::ReturnCode::OK) {
-                    ESP_LOGW("main", "publish WATER_T failed");
+                if (time_ok) {
+                    publish_reading("WATER_T", ts, w.temperature);
                 }
             } else {
                 ESP_LOGW("ds18b20", "sample failed, rc=%d", static_cast<int>(wrc));
