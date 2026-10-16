@@ -7,6 +7,7 @@
 
 #include "nvs_flash.h"
 #include "esp_netif.h"
+#include "esp_pm.h"
 
 #include <cstdio>
 
@@ -46,6 +47,18 @@ extern "C" void app_main() {
         ESP_LOGW("main", "wifi not connected, rc=%d", static_cast<int>(rc));
     }
 
+    // power management: automatic light sleep when idle.
+    // Keeps the association alive and RAM retained, unlike deep sleep.
+    // Also limits self-heating, which matters since the DHT is measuring
+    // the same enclosure this board sits in.
+    esp_pm_config_t pm_cfg = {
+        .max_freq_mhz = 160,
+        .min_freq_mhz = 40,
+        .light_sleep_enable = true,
+    };
+    ESP_ERROR_CHECK(esp_pm_configure(&pm_cfg));
+    wifi.set_power_save(true);
+
     // mqtt
     constexpr const int MQTT_CONNECT_TIMEOUT_MS = 10000;
     char status_topic[96];
@@ -68,7 +81,7 @@ extern "C" void app_main() {
     }
 
     // dht sensor
-    constexpr const uint32_t DHT_READ_INTERVAL_MS = 60000;
+    constexpr const uint32_t DHT_READ_INTERVAL_MS = 1800000;   // 30 minutes
     DhtSensor dht(GPIO_NUM_4, DhtSensor::DHT22);
     ESP_ERROR_CHECK(dht.init());
 
@@ -83,17 +96,17 @@ extern "C" void app_main() {
             ESP_LOGI("dht", "%.1f F  %.1f %%RH", c_to_f(d.temperature), d.humidity);
 
             snprintf(payload, sizeof(payload),
-                     "{\"schema\":1,\"seq\":%lu,\"id\":\"ENC_T\",\"v\":%.2f}",
+                     "{\"schema\":1,\"seq\":%lu,\"id\":\"TMP\",\"v\":%.2f}",
                      seq++, d.temperature);
             if (mqtt.publish(telemetry_topic, payload) != MqttClient::ReturnCode::OK) {
-                ESP_LOGW("main", "publish ENC_T failed");
+                ESP_LOGW("main", "publish TMP failed");
             }
 
             snprintf(payload, sizeof(payload),
-                     "{\"schema\":1,\"seq\":%lu,\"id\":\"ENC_RH\",\"v\":%.2f}",
+                     "{\"schema\":1,\"seq\":%lu,\"id\":\"HUM\",\"v\":%.2f}",
                      seq++, d.humidity);
             if (mqtt.publish(telemetry_topic, payload) != MqttClient::ReturnCode::OK) {
-                ESP_LOGW("main", "publish ENC_RH failed");
+                ESP_LOGW("main", "publish HUM failed");
             }
         } else {
             ESP_LOGW("dht", "sample failed, rc=%d", static_cast<int>(drc));

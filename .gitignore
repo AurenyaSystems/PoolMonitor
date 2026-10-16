@@ -21,3 +21,4 @@ sdkconfig
 docs/
 main/secrets.h
 managed_components/
+sdkconfig.old
