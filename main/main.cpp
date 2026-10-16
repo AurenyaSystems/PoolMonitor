@@ -4,6 +4,7 @@
 #include "dht_sensor.h"
 #include "wifi.h"
 #include "mqtt.h"
+#include "ds18b20.h"
 
 #include "nvs_flash.h"
 #include "esp_netif.h"
@@ -85,6 +86,25 @@ extern "C" void app_main() {
     DhtSensor dht(GPIO_NUM_4, DhtSensor::DHT22);
     ESP_ERROR_CHECK(dht.init());
 
+    // water temperature: DS18B20 probes sharing one 1-Wire bus (POOL-9)
+    constexpr gpio_num_t ONEWIRE_PIN = GPIO_NUM_27;
+    constexpr int MAX_WATER_PROBES = 2;
+    OneWire onewire(ONEWIRE_PIN);
+    ESP_ERROR_CHECK(onewire.init());
+
+    uint64_t roms[MAX_WATER_PROBES] = {};
+    int probe_count = onewire.search(roms, MAX_WATER_PROBES);
+    ESP_LOGI("ds18b20", "found %d probe(s) on GPIO %d", probe_count, ONEWIRE_PIN);
+    for (int i = 0; i < probe_count; i++) {
+        ESP_LOGI("ds18b20", "  probe %d: ROM %016llX", i, roms[i]);
+    }
+
+    // Only the first probe is published for now; search order is by ROM ID,
+    // so it stays the same probe across reboots. If none was found, roms[0]
+    // is 0 and init() fails, which leaves the sensor skipped in the loop.
+    Ds18b20 water(onewire, roms[0]);
+    water.init();
+
     uint32_t seq = 0;
     char payload[128];
 
@@ -110,6 +130,24 @@ extern "C" void app_main() {
             }
         } else {
             ESP_LOGW("dht", "sample failed, rc=%d", static_cast<int>(drc));
+        }
+
+        if (water.get_status() != Ds18b20::Status::UNINITIALIZED) {
+            auto wrc = water.sample();
+
+            if (wrc == Ds18b20::ReturnCode::OK) {
+                auto w = water.read_data();
+                ESP_LOGI("ds18b20", "water %.2f C (%.1f F)", w.temperature, c_to_f(w.temperature));
+
+                snprintf(payload, sizeof(payload),
+                         "{\"schema\":1,\"seq\":%lu,\"id\":\"WATER_T\",\"v\":%.2f}",
+                         seq++, w.temperature);
+                if (mqtt.publish(telemetry_topic, payload) != MqttClient::ReturnCode::OK) {
+                    ESP_LOGW("main", "publish WATER_T failed");
+                }
+            } else {
+                ESP_LOGW("ds18b20", "sample failed, rc=%d", static_cast<int>(wrc));
+            }
         }
 
         vTaskDelay(pdMS_TO_TICKS(DHT_READ_INTERVAL_MS));
