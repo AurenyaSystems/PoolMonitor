@@ -1,5 +1,8 @@
 #include "secrets.h"
 
+//app
+#include "telemetry.h"
+
 //drivers
 #include "dht_sensor.h"
 #include "wifi.h"
@@ -14,7 +17,6 @@
 #include "esp_mac.h"
 
 #include <cstdio>
-#include <ctime>
 
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
@@ -38,8 +40,6 @@ static void get_device_id(char* out, size_t len)
     snprintf(out, len, "%02x%02x%02x%02x%02x%02x", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 #endif
 }
-
-constexpr float c_to_f(float c) { return c * 9.0f / 5.0f + 32.0f; }
 
 extern "C" void app_main() {
 
@@ -116,7 +116,6 @@ extern "C" void app_main() {
     }
 
     // dht sensor
-    constexpr const uint32_t DHT_READ_INTERVAL_MS = 1800000;   // 30 minutes
     DhtSensor dht(GPIO_NUM_4, DhtSensor::DHT22);
     ESP_ERROR_CHECK(dht.init());
 
@@ -126,8 +125,8 @@ extern "C" void app_main() {
     ESP_ERROR_CHECK(onewire.init());
 
     // Find the probe's ROM ID instead of hardcoding it, so a swapped probe
-    // needs no reflash. If none is found, rom stays 0 and init() fails, which
-    // leaves the sensor skipped in the loop.
+    // needs no reflash. If none is found, rom stays 0 and init() fails, so no
+    // water sampler is started.
     uint64_t rom = 0;
     if (onewire.search(&rom, 1) == 1) {
         ESP_LOGI("ds18b20", "probe on GPIO %d: ROM %016llX", ONEWIRE_PIN, rom);
@@ -137,59 +136,29 @@ extern "C" void app_main() {
     Ds18b20 water(onewire, rom);
     water.init();
 
+    // telemetry (POOL-36): each sensor samples on its own interval and queues
+    // readings; this task drains the queue to MQTT on its own cadence.
+    constexpr const uint32_t DHT_INTERVAL_MS   = 30 * 60 * 1000;
+    constexpr const uint32_t WATER_INTERVAL_MS = 30 * 60 * 1000;
+    constexpr const uint32_t TX_INTERVAL_MS    = 60 * 1000;
+    constexpr const size_t   QUEUE_DEPTH       = 32;    // ~5 h of readings at these intervals if the broker is down
+
+    ReadingQueue queue;
+    if (!queue.init(QUEUE_DEPTH)) { return; }
+
     SeqCounter seq;
     seq.init();   // on failure it still counts, just not across reboots
-    char payload[128];
 
-    // One flat message per reading (POOL-38); ts is when the reading was taken
-    auto publish_reading = [&](const char* id, time_t ts, float v) {
-        snprintf(payload, sizeof(payload),
-                 "{\"schema\":1,\"seq\":%lu,\"id\":\"%s\",\"ts\":%lld,\"v\":%.2f}",
-                 seq.next(), id, static_cast<long long>(ts), v);
-        if (mqtt.publish(telemetry_topic, payload) != MqttClient::ReturnCode::OK) {
-            ESP_LOGW("main", "publish %s failed", id);
-        }
-    };
+    // Samplers run on core 1 like this task: the DHT and 1-Wire bit loops
+    // disable interrupts briefly and must stay off the WiFi core (0).
+    // Their args live on this stack, which is fine since run_transmitter never returns.
+    SamplerArgs<DhtSensor> dht_args { &dht, &queue, DHT_INTERVAL_MS };
+    xTaskCreatePinnedToCore(dht_sampler_task, "dht", 4096, &dht_args, 5, nullptr, 1);
 
-    while (true) {
-        // A reading with a bogus epoch looks valid downstream; a held one is
-        // just a gap. Sensors are still sampled so their health stays current.
-        bool time_ok = time_is_synced();
-        if (!time_ok) {
-            ESP_LOGW("main", "time not synced, holding readings");
-        }
-
-        auto drc = dht.sample();
-        time_t ts = time(nullptr);
-
-        if (drc == DhtSensor::ReturnCode::DHT_OK) {
-            auto d = dht.read_data();
-            ESP_LOGI("dht", "%.1f F  %.1f %%RH", c_to_f(d.temperature), d.humidity);
-
-            if (time_ok) {
-                publish_reading("ENC_T", ts, d.temperature);
-                publish_reading("ENC_RH", ts, d.humidity);
-            }
-        } else {
-            ESP_LOGW("dht", "sample failed, rc=%d", static_cast<int>(drc));
-        }
-
-        if (water.get_status() != Ds18b20::Status::UNINITIALIZED) {
-            auto wrc = water.sample();
-            ts = time(nullptr);
-
-            if (wrc == Ds18b20::ReturnCode::OK) {
-                auto w = water.read_data();
-                ESP_LOGI("ds18b20", "water %.2f C (%.1f F)", w.temperature, c_to_f(w.temperature));
-
-                if (time_ok) {
-                    publish_reading("WATER_T", ts, w.temperature);
-                }
-            } else {
-                ESP_LOGW("ds18b20", "sample failed, rc=%d", static_cast<int>(wrc));
-            }
-        }
-
-        vTaskDelay(pdMS_TO_TICKS(DHT_READ_INTERVAL_MS));
+    SamplerArgs<Ds18b20> water_args { &water, &queue, WATER_INTERVAL_MS };
+    if (water.get_status() != Ds18b20::Status::UNINITIALIZED) {
+        xTaskCreatePinnedToCore(water_sampler_task, "water", 4096, &water_args, 5, nullptr, 1);
     }
+
+    run_transmitter(queue, mqtt, seq, telemetry_topic, TX_INTERVAL_MS);
 }
