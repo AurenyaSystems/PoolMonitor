@@ -73,4 +73,10 @@ bash -c 'export PATH=$(echo "$PATH" | tr ":" "\n" | grep -v eim_gui | paste -sd:
   source ~/.espressif/tools/activate_idf_v6.0.2.sh >/dev/null 2>&1; idf.py build'
 ```
 
-A compile-check needs `main/secrets.h`. Copy it from the example if it's missing. Building is the only check available without a board. Flashing and monitoring need the ESP connected, so ask the user.
+A compile-check needs `main/secrets.h`. Copy it from the example if it's missing. Flashing and monitoring need the ESP connected, so ask the user.
+
+## Host tests
+
+`test/host/run.sh` runs the driver and CLI tests on the host against stub headers in `test/host/stubs/` and simulated hardware. Run it after any change to `core/`, `drivers/` or `app/`, and before opening a PR. When you add a driver method or a CLI command, add a case. When a driver starts using a new ESP-IDF symbol, add it to the stubs.
+
+The tests can't see electrical timing, pull-ups or ESP-IDF behaviour. A passing run means the logic is right, not that the hardware works.

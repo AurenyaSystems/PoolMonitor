@@ -112,6 +112,12 @@ With light sleep enabled, the first keystrokes after a quiet period may be lost.
 - **Readings arrive at the broker** within about a minute of being sampled, with consecutive `seq`.
 - **After a reboot,** `seq` continues instead of restarting.
 
+## Host tests
+
+`test/host/run.sh` compiles the real driver and app sources against stub ESP-IDF headers and drives them with simulated hardware: a bit-level 1-Wire bus with DS18B20s on it, a fake I2C EZO stamp, and a recording MQTT client. It needs only `g++`, takes a few seconds, and has caught real bugs before they reached the board. Run it before opening a PR.
+
+It can't check electrical timing, pull-ups or anything in ESP-IDF itself. Those still need the board.
+
 ## Status
 
 Drivers for every v1 sensor, SNTP, the telemetry pipeline and WiFi backoff compile, but **most have not been validated on hardware yet**; see the POOL tickets in review. The DHT22 driver is hardware-validated.
