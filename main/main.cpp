@@ -8,6 +8,7 @@
 #include "wifi.h"
 #include "mqtt.h"
 #include "ds18b20.h"
+#include "ezo_sensor.h"
 #include "time_sync.h"
 #include "seq_counter.h"
 
@@ -136,10 +137,30 @@ extern "C" void app_main() {
     Ds18b20 water(onewire, rom);
     water.init();
 
+    // I2C bus for the EZO stamps (POOL-10). Internal pull-ups are weak; the
+    // EZO carriers or external 4.7k resistors should provide the real ones.
+    constexpr gpio_num_t I2C_SDA_PIN = GPIO_NUM_21;
+    constexpr gpio_num_t I2C_SCL_PIN = GPIO_NUM_22;
+    i2c_master_bus_config_t i2c_cfg = {};
+    i2c_cfg.i2c_port = -1;   // auto
+    i2c_cfg.sda_io_num = I2C_SDA_PIN;
+    i2c_cfg.scl_io_num = I2C_SCL_PIN;
+    i2c_cfg.clk_source = I2C_CLK_SRC_DEFAULT;
+    i2c_cfg.glitch_ignore_cnt = 7;
+    i2c_cfg.flags.enable_internal_pullup = true;
+    i2c_master_bus_handle_t i2c_bus;
+    ESP_ERROR_CHECK(i2c_new_master_bus(&i2c_cfg, &i2c_bus));
+
+    // pH stamp: range is the EZO-pH measurement range
+    constexpr uint8_t EZO_PH_ADDR = 0x63;
+    EzoSensor ph(i2c_bus, EZO_PH_ADDR, 0.0f, 14.0f);
+    ph.init();
+
     // telemetry (POOL-36): each sensor samples on its own interval and queues
     // readings; this task drains the queue to MQTT on its own cadence.
     constexpr const uint32_t DHT_INTERVAL_MS   = 30 * 60 * 1000;
     constexpr const uint32_t WATER_INTERVAL_MS = 30 * 60 * 1000;
+    constexpr const uint32_t PH_INTERVAL_MS    = 30 * 60 * 1000;
     constexpr const uint32_t TX_INTERVAL_MS    = 60 * 1000;
     constexpr const size_t   QUEUE_DEPTH       = 32;    // ~5 h of readings at these intervals if the broker is down
 
@@ -158,6 +179,13 @@ extern "C" void app_main() {
     SamplerArgs<Ds18b20> water_args { &water, &queue, WATER_INTERVAL_MS };
     if (water.get_status() != Ds18b20::Status::UNINITIALIZED) {
         xTaskCreatePinnedToCore(water_sampler_task, "water", 4096, &water_args, 5, nullptr, 1);
+    }
+
+    // pH gets the water probe for temperature compensation, if there is one
+    Ds18b20* ph_water = (water.get_status() != Ds18b20::Status::UNINITIALIZED) ? &water : nullptr;
+    EzoSamplerArgs ph_args { &ph, &queue, PH_INTERVAL_MS, "PH", ph_water };
+    if (ph.get_status() != EzoSensor::Status::UNINITIALIZED) {
+        xTaskCreatePinnedToCore(ezo_sampler_task, "ph", 4096, &ph_args, 5, nullptr, 1);
     }
 
     run_transmitter(queue, mqtt, seq, telemetry_topic, TX_INTERVAL_MS);

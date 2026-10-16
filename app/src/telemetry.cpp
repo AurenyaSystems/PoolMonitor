@@ -1,5 +1,6 @@
 #include "telemetry.h"
 
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <ctime>
@@ -128,6 +129,47 @@ void water_sampler_task(void* arg)
         else
         {
             ESP_LOGW("ds18b20", "sample failed, rc=%d", static_cast<int>(rc));
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(a->interval_ms));
+    }
+}
+
+void ezo_sampler_task(void* arg)
+{
+    auto* a = static_cast<EzoSamplerArgs*>(arg);
+
+    while (true)
+    {
+        // Temperature compensation happens on the stamp; firmware only passes
+        // the measured water temperature along. If there is none yet, the
+        // stamp keeps its last value (25 degC after power-up).
+        if (a->water)
+        {
+            float t = a->water->read_data().temperature;
+            if (std::isnan(t)) {
+                ESP_LOGW(a->id, "no water temperature yet, reading uncompensated");
+            } else if (a->sensor->set_temperature(t) != EzoSensor::ReturnCode::OK) {
+                ESP_LOGW(a->id, "temperature compensation failed");
+            }
+        }
+
+        auto rc = a->sensor->sample();
+        int64_t ts = time(nullptr);
+
+        if (rc == EzoSensor::ReturnCode::OK)
+        {
+            float v = a->sensor->read_data().value;
+            ESP_LOGI(a->id, "%.2f", v);
+
+            if (can_queue(a->id))
+            {
+                a->queue->push(a->id, ts, v);
+            }
+        }
+        else
+        {
+            ESP_LOGW(a->id, "sample failed, rc=%d", static_cast<int>(rc));
         }
 
         vTaskDelay(pdMS_TO_TICKS(a->interval_ms));

@@ -6,9 +6,11 @@ idf_component_register(
         "src/ds18b20.cpp"
         "src/time_sync.cpp"
         "src/seq_counter.cpp"
+        "src/ezo_sensor.cpp"
     INCLUDE_DIRS "inc"
     REQUIRES
         esp_driver_gpio
+        esp_driver_i2c
         esp_timer
         esp_event
         core
