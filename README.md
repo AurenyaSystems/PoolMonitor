@@ -51,6 +51,8 @@ Power: automatic light sleep plus WiFi modem sleep, configured in `sdkconfig.def
 |---|---|---|---|
 | `pool/<device_id>/telemetry` | 1 | no | `{"schema":1,"seq":N,"id":"PH","ts":<epoch>,"v":7.42}` |
 | `pool/<device_id>/status` | 1 | yes | `online` / `offline` (LWT) |
+| `pool/<device_id>/cmd` | 1 | no | one console command as plain text, e.g. `ph cal mid 7.00` (provisional) |
+| `pool/<device_id>/cmd/response` | 1 | no | the command's reply, plain text |
 
 - **One message per reading.**
 - **Units:** SI, except ORP in mV. No units in the payload; the server maps IDs to units.
@@ -66,6 +68,30 @@ Uses ESP-IDF **v6.0.2**.
 2. `idf.py build flash monitor`
 
 > **Delete `sdkconfig` whenever `sdkconfig.defaults` changes.** The defaults only apply when `sdkconfig` is regenerated, and `idf.py fullclean` does not delete it. A stale `sdkconfig` without power management makes `esp_pm_configure()` fail and the board reboot-loop.
+
+## Console and server commands
+
+The same commands work from the UART console (`idf.py monitor`, prompt `pool>`) and from the MQTT `cmd` topic. Type `help` for the list.
+
+| Command | What it does |
+|---|---|
+| `status` | one line per subsystem: WiFi, MQTT, time, seq, queue, every sensor with its last value and age |
+| `dht read` / `dht status` | read the enclosure sensor now, or show its last reading |
+| `water read` / `water status` / `water rom` | read the DS18B20 now, show its last reading, or print its ROM ID |
+| `ph read` / `ph status` | read the pH stamp now, or show its last reading |
+| `ph temp <degC>` | send a temperature for compensation (the sampler does this automatically) |
+| `ph cal mid 7.00`, `ph cal low 4.00`, `ph cal high 10.00` | calibrate; `mid` first, it clears the others |
+| `ph cal clear` / `ph cal ?` | clear calibration, or ask how many points are stored |
+| `orp read` / `orp status` / `orp cal 225` / `orp cal clear` / `orp cal ?` | same for ORP, calibrated against the 225 mV standard |
+| `wifi status` / `wifi ps on\|off` | link state and disconnect count; toggle modem sleep |
+| `mqtt status` | connection state |
+| `queue status` / `queue push <id> <value>` | readings waiting; push a reading through the real pipeline (**the server stores it**) |
+| `time` / `seq` | clock and sync state; next sequence number |
+| `reboot` | restart in 1 s, after the reply is sent |
+
+A read from the console waits for the sampler if one is mid-read, so it can take up to a second.
+
+With light sleep enabled, the first keystrokes after a quiet period may be lost. Press Enter once, then type.
 
 ## Bring-up checklist
 

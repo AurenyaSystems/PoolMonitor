@@ -52,6 +52,11 @@ public:
      */
     uint32_t next();
 
+    /**
+     * @brief The value next() will hand out, without consuming it.
+     */
+    uint32_t peek() const { return _next; }
+
     SeqCounter(const SeqCounter&) = delete;
     SeqCounter& operator=(const SeqCounter&) = delete;
 };

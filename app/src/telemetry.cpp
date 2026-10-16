@@ -74,6 +74,29 @@ bool ReadingQueue::pop(Reading& out)
     return xQueueReceive(_queue, &out, 0) == pdTRUE;
 }
 
+size_t ReadingQueue::count() const
+{
+    return _queue ? uxQueueMessagesWaiting(_queue) : 0;
+}
+
+// ---------------------------------------------------------------- sensor lock
+
+SemaphoreHandle_t SensorLock::_mutex = nullptr;
+
+SensorLock::SensorLock()
+{
+    // Created on first use: static init order doesn't matter and there is no
+    // explicit init() to forget. Recursive so a command can call a helper
+    // that also locks.
+    if (!_mutex) { _mutex = xSemaphoreCreateRecursiveMutex(); }
+    xSemaphoreTakeRecursive(_mutex, portMAX_DELAY);
+}
+
+SensorLock::~SensorLock()
+{
+    xSemaphoreGiveRecursive(_mutex);
+}
+
 // ---------------------------------------------------------------- samplers
 
 void dht_sampler_task(void* arg)
@@ -82,7 +105,11 @@ void dht_sampler_task(void* arg)
 
     while (true)
     {
-        auto rc = a->sensor->sample();
+        DhtSensor::ReturnCode rc;
+        {
+            SensorLock lock;
+            rc = a->sensor->sample();
+        }
         int64_t ts = time(nullptr);
 
         // A reading only exists when sample() succeeded, which also means the
@@ -113,7 +140,11 @@ void water_sampler_task(void* arg)
 
     while (true)
     {
-        auto rc = a->sensor->sample();
+        Ds18b20::ReturnCode rc;
+        {
+            SensorLock lock;
+            rc = a->sensor->sample();
+        }
         int64_t ts = time(nullptr);
 
         if (rc == Ds18b20::ReturnCode::OK)
@@ -141,20 +172,25 @@ void ezo_sampler_task(void* arg)
 
     while (true)
     {
-        // Temperature compensation happens on the stamp; firmware only passes
-        // the measured water temperature along. If there is none yet, the
-        // stamp keeps its last value (25 degC after power-up).
-        if (a->water)
+        EzoSensor::ReturnCode rc;
         {
-            float t = a->water->read_data().temperature;
-            if (std::isnan(t)) {
-                ESP_LOGW(a->id, "no water temperature yet, reading uncompensated");
-            } else if (a->sensor->set_temperature(t) != EzoSensor::ReturnCode::OK) {
-                ESP_LOGW(a->id, "temperature compensation failed");
-            }
-        }
+            SensorLock lock;
 
-        auto rc = a->sensor->sample();
+            // Temperature compensation happens on the stamp; firmware only passes
+            // the measured water temperature along. If there is none yet, the
+            // stamp keeps its last value (25 degC after power-up).
+            if (a->water)
+            {
+                float t = a->water->read_data().temperature;
+                if (std::isnan(t)) {
+                    ESP_LOGW(a->id, "no water temperature yet, reading uncompensated");
+                } else if (a->sensor->set_temperature(t) != EzoSensor::ReturnCode::OK) {
+                    ESP_LOGW(a->id, "temperature compensation failed");
+                }
+            }
+
+            rc = a->sensor->sample();
+        }
         int64_t ts = time(nullptr);
 
         if (rc == EzoSensor::ReturnCode::OK)
