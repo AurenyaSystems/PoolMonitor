@@ -6,10 +6,12 @@
 #include "mqtt.h"
 #include "ds18b20.h"
 #include "time_sync.h"
+#include "seq_counter.h"
 
 #include "nvs_flash.h"
 #include "esp_netif.h"
 #include "esp_pm.h"
+#include "esp_mac.h"
 
 #include <cstdio>
 #include <ctime>
@@ -22,6 +24,20 @@
 #ifndef SNTP_SERVER
 #define SNTP_SERVER "pool.ntp.org"
 #endif
+
+// device_id is the topic prefix and MQTT client id (POOL-38). It comes from
+// the factory MAC so every board is unique without configuration. Defining
+// MQTT_DEVICE_ID in secrets.h overrides it, e.g. to keep an existing id.
+static void get_device_id(char* out, size_t len)
+{
+#ifdef MQTT_DEVICE_ID
+    snprintf(out, len, "%s", MQTT_DEVICE_ID);
+#else
+    uint8_t mac[6];
+    ESP_ERROR_CHECK(esp_efuse_mac_get_default(mac));
+    snprintf(out, len, "%02x%02x%02x%02x%02x%02x", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+#endif
+}
 
 constexpr float c_to_f(float c) { return c * 9.0f / 5.0f + 32.0f; }
 
@@ -76,12 +92,16 @@ extern "C" void app_main() {
 
     // mqtt
     constexpr const int MQTT_CONNECT_TIMEOUT_MS = 10000;
+    char device_id[32];
+    get_device_id(device_id, sizeof(device_id));
+    ESP_LOGI("main", "device id: %s", device_id);
+
     char status_topic[96];
     char telemetry_topic[96];
-    snprintf(status_topic, sizeof(status_topic), "pool/%s/status", MQTT_DEVICE_ID);
-    snprintf(telemetry_topic, sizeof(telemetry_topic), "pool/%s/telemetry", MQTT_DEVICE_ID);
+    snprintf(status_topic, sizeof(status_topic), "pool/%s/status", device_id);
+    snprintf(telemetry_topic, sizeof(telemetry_topic), "pool/%s/telemetry", device_id);
 
-    MqttClient mqtt(MQTT_BROKER_URI, MQTT_DEVICE_ID);
+    MqttClient mqtt(MQTT_BROKER_URI, device_id);
     auto mrc = mqtt.init();
     if (mrc != MqttClient::ReturnCode::OK) {
         ESP_LOGE("main", "mqtt init failed: %d", static_cast<int>(mrc));
@@ -117,14 +137,15 @@ extern "C" void app_main() {
     Ds18b20 water(onewire, rom);
     water.init();
 
-    uint32_t seq = 0;
+    SeqCounter seq;
+    seq.init();   // on failure it still counts, just not across reboots
     char payload[128];
 
     // One flat message per reading (POOL-38); ts is when the reading was taken
     auto publish_reading = [&](const char* id, time_t ts, float v) {
         snprintf(payload, sizeof(payload),
                  "{\"schema\":1,\"seq\":%lu,\"id\":\"%s\",\"ts\":%lld,\"v\":%.2f}",
-                 seq++, id, static_cast<long long>(ts), v);
+                 seq.next(), id, static_cast<long long>(ts), v);
         if (mqtt.publish(telemetry_topic, payload) != MqttClient::ReturnCode::OK) {
             ESP_LOGW("main", "publish %s failed", id);
         }
