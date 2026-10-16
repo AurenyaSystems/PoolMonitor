@@ -3,6 +3,7 @@
 
 #include <stdint.h>         // for uintx_t
 #include "esp_event.h"      // for esp_event_base_t
+#include "esp_timer.h"      // for esp_timer_handle_t
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
 
@@ -16,9 +17,9 @@ public:
         INVALID_ARG,          ///< SSID or password empty / too long
         NOT_INITIALIZED,      ///< called before init()
         ALREADY_INITIALIZED,
-        TIMEOUT,              ///< no IP within the requested window
-        AUTH_FAILED,          ///< terminal: credentials rejected
-        AP_NOT_FOUND,         ///< retryable: SSID not seen
+        TIMEOUT,              ///< no IP within the requested window; still retrying in the background
+        AUTH_FAILED,          ///< terminal: credentials rejected repeatedly, retries stopped
+        AP_NOT_FOUND,         ///< SSID not seen within the window; still retrying in the background
         INTERNAL_ERROR        ///< an underlying esp_ call failed
     };
 
@@ -29,7 +30,10 @@ private:
 
     Status _status;             ///< Current status of the WiFi connection
     uint8_t _last_reason;       ///< Last disconnect reason code
-    uint32_t _retry_count;      ///< Count of connection retries
+    uint32_t _backoff_ms;       ///< Delay before the next reconnect attempt
+    uint32_t _auth_failures;    ///< Auth-type failures since the last successful association
+    uint32_t _disconnects;      ///< Disconnects since boot, for link-stability stats
+    esp_timer_handle_t _retry_timer; ///< One-shot timer that fires the next connect attempt
 
     EventGroupHandle_t _events; ///< Event group handle for WiFi events
 
@@ -38,6 +42,8 @@ private:
 
     // private methods
     static void event_handler(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data);
+    static void retry_cb(void* arg);
+    void schedule_retry();
 
 
 public:
@@ -72,6 +78,12 @@ public:
      * @return true if the device has an IP address, false otherwise
      */
     bool has_ip() const;
+
+    /**
+     * @brief Number of disconnects since boot.
+     * @return Disconnect count
+     */
+    uint32_t get_disconnect_count() const { return _disconnects; }
 
     /**
      * @brief Enable or disable WiFi modem sleep.
