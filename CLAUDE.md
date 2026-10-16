@@ -46,9 +46,9 @@ This is a home project, not a product. Keep it simple.
 ## Layout
 
 - `core/` holds bus code (`onewire`).
-- `drivers/` holds sensor and peripheral drivers (`dht_sensor`, `wifi`, `mqtt`).
-- `main/main.cpp` sets up and wires everything.
-- POOL-36 plans an `app/` layer with no `esp_` symbols.
+- `drivers/` holds sensor and peripheral drivers: `dht_sensor`, `ds18b20`, `ezo_sensor`, `wifi`, `mqtt`, `time_sync`, `seq_counter`.
+- `app/` holds the telemetry pipeline (POOL-36): sampler tasks feed a `ReadingQueue`, and `run_transmitter` drains it to MQTT. It makes no direct ESP-IDF calls; FreeRTOS, POSIX and `ESP_LOGx` are fine.
+- `main/main.cpp` sets up and wires everything. To add a sensor, write a driver, add a sampler in `app/`, and start its task in `main.cpp`.
 - Every new `.cpp` goes into its component's `CMakeLists.txt`, along with any IDF component it uses (`REQUIRES` / `PRIV_REQUIRES`).
 - Config that must survive a clean goes in `sdkconfig.defaults`. `sdkconfig` itself is gitignored. Defaults only apply when `sdkconfig` is regenerated, and `idf.py fullclean` does *not* delete it. After `sdkconfig.defaults` changes, delete `sdkconfig`. If you don't, `esp_pm_configure()` fails with `ESP_ERR_NOT_SUPPORTED` and boot aborts.
 - Credentials live in the gitignored `main/secrets.h`, with `main/secrets.h.example` as the template.
