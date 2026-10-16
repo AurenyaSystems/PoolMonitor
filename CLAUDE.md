@@ -59,6 +59,7 @@ This is a home project, not a product. Keep it simple.
 
 - Topics are `pool/<device_id>/telemetry` (QoS 1, not retained) and `pool/<device_id>/status` (retained `online`/`offline`, the LWT target).
 - Downlink (provisional, POOL-6): `pool/<device_id>/cmd` carries one CLI line as plain text (e.g. `ph cal mid 7.00`); the reply goes to `pool/<device_id>/cmd/response` as plain text. The server doesn't send commands yet.
+- Device state goes to retained `pool/<device_id>/sysinfo/<leaf>` via `publish_sysinfo()`. The server stores any leaf without a schema change. Current leaves: `version`, `sensor_status/<ID>` (on transition), `calibration/<ID>` (after a `cal`). Add state as a new leaf, not a new topic.
 - There is one flat message per reading: `{"schema":1,"seq":N,"id":"PH","ts":<epoch>,"v":7.42}`.
 - Values are in SI units, with no units in the payload. Sensor IDs: `ENC_T`, `ENC_RH`, `WATER_T`, `PH`, `ORP`.
 - Firmware publishes raw values only, with no derived values. Skip a reading when its sensor is DEGRADED or FAILED. Never publish null.

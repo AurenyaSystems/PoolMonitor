@@ -23,6 +23,39 @@ namespace
         ESP_LOGW(tag, "time not synced, reading not queued");
         return false;
     }
+
+    // Sensor health goes out as a retained sysinfo leaf on every transition,
+    // so the server can show DEGRADED/FAILED without a reading stream that
+    // has gone quiet being the only clue. Returns false if the publish didn't
+    // go out, so the caller retries on its next sample.
+    template <typename S>
+    bool report_status(MqttClient* mqtt, const char* prefix, const char* id, S status, int consecutive)
+    {
+        const char* severity = status == S::READY    ? "ok"
+                             : status == S::DEGRADED ? "warn"
+                             :                         "error";
+        char leaf[48];
+        char payload[96];
+        snprintf(leaf, sizeof(leaf), "sensor_status/%s", id);
+        snprintf(payload, sizeof(payload), "{\"status\":\"%s\",\"consecutive\":%d,\"severity\":\"%s\"}",
+                 status_name(status), consecutive, severity);
+        return publish_sysinfo(mqtt, prefix, leaf, payload);
+    }
+}
+
+bool publish_sysinfo(MqttClient* mqtt, const char* prefix, const char* leaf, const char* payload)
+{
+    if (!mqtt || !prefix) { return false; }
+
+    char topic[128];
+    snprintf(topic, sizeof(topic), "%s/%s", prefix, leaf);
+    if (mqtt->publish(topic, payload, 1, true) != MqttClient::ReturnCode::OK)
+    {
+        ESP_LOGW("sysinfo", "publish %s failed", topic);
+        return false;
+    }
+    ESP_LOGI("sysinfo", "%s = %s", topic, payload);
+    return true;
 }
 
 // ---------------------------------------------------------------- queue
@@ -102,6 +135,7 @@ SensorLock::~SensorLock()
 void dht_sampler_task(void* arg)
 {
     auto* a = static_cast<SamplerArgs<DhtSensor>*>(arg);
+    auto reported = DhtSensor::Status::UNINITIALIZED;
 
     while (true)
     {
@@ -111,6 +145,18 @@ void dht_sampler_task(void* arg)
             rc = a->sensor->sample();
         }
         int64_t ts = time(nullptr);
+
+        // One sensor, two IDs: the server tracks health per ID
+        auto status = a->sensor->get_status();
+        if (status != reported)
+        {
+            int n = a->sensor->get_consecutive_failures();
+            if (report_status(a->mqtt, a->sysinfo_prefix, "ENC_T", status, n) &&
+                report_status(a->mqtt, a->sysinfo_prefix, "ENC_RH", status, n))
+            {
+                reported = status;
+            }
+        }
 
         // A reading only exists when sample() succeeded, which also means the
         // sensor is READY: DEGRADED/FAILED sensors produce nothing, never a null
@@ -137,6 +183,7 @@ void dht_sampler_task(void* arg)
 void water_sampler_task(void* arg)
 {
     auto* a = static_cast<SamplerArgs<Ds18b20>*>(arg);
+    auto reported = Ds18b20::Status::UNINITIALIZED;
 
     while (true)
     {
@@ -146,6 +193,13 @@ void water_sampler_task(void* arg)
             rc = a->sensor->sample();
         }
         int64_t ts = time(nullptr);
+
+        auto status = a->sensor->get_status();
+        if (status != reported &&
+            report_status(a->mqtt, a->sysinfo_prefix, "WATER_T", status, a->sensor->get_consecutive_failures()))
+        {
+            reported = status;
+        }
 
         if (rc == Ds18b20::ReturnCode::OK)
         {
@@ -169,6 +223,7 @@ void water_sampler_task(void* arg)
 void ezo_sampler_task(void* arg)
 {
     auto* a = static_cast<EzoSamplerArgs*>(arg);
+    auto reported = EzoSensor::Status::UNINITIALIZED;
 
     while (true)
     {
@@ -192,6 +247,13 @@ void ezo_sampler_task(void* arg)
             rc = a->sensor->sample();
         }
         int64_t ts = time(nullptr);
+
+        auto status = a->sensor->get_status();
+        if (status != reported &&
+            report_status(a->mqtt, a->sysinfo_prefix, a->id, status, a->sensor->get_consecutive_failures()))
+        {
+            reported = status;
+        }
 
         if (rc == EzoSensor::ReturnCode::OK)
         {

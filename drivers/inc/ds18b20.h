@@ -90,6 +90,7 @@ public:
     Ds18b20Data read_data() const { return _data; }
 
     Status get_status() const { return _status; }
+    int get_consecutive_failures() const { return _consecutive_failures; }
     uint64_t get_rom() const { return _rom; }
 
     Ds18b20(const Ds18b20&) = delete;

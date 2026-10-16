@@ -37,6 +37,7 @@ public:
         MqttClient*   mqtt;
         ReadingQueue* queue;
         SeqCounter*   seq;
+        const char*   sysinfo_prefix;   ///< "pool/<device_id>/sysinfo", for calibration records
     };
 
     constexpr static size_t MAX_LINE  = 128;    ///< longest command line accepted
@@ -52,7 +53,7 @@ private:
     int cmd_status(int argc, char** argv, char* out, size_t len);
     int cmd_dht   (int argc, char** argv, char* out, size_t len);
     int cmd_water (int argc, char** argv, char* out, size_t len);
-    int cmd_ezo   (EzoSensor* s, const char* name, int argc, char** argv, char* out, size_t len);
+    int cmd_ezo   (EzoSensor* s, const char* name, const char* id, int argc, char** argv, char* out, size_t len);
     int cmd_wifi  (int argc, char** argv, char* out, size_t len);
     int cmd_mqtt  (int argc, char** argv, char* out, size_t len);
     int cmd_queue (int argc, char** argv, char* out, size_t len);

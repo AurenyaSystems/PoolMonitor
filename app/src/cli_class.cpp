@@ -20,16 +20,6 @@ namespace
 {
     constexpr int MAX_ARGS = 8;
 
-    // Every driver's Status enum has the same four values in the same order
-    const char* STATUS_NAMES[] = { "UNINITIALIZED", "READY", "DEGRADED", "FAILED" };
-
-    template <typename S>
-    const char* status_name(S s)
-    {
-        int i = static_cast<int>(s);
-        return (i >= 0 && i < 4) ? STATUS_NAMES[i] : "?";
-    }
-
     // Seconds since an esp_timer timestamp, or -1 if there has been no reading
     long age_s(int64_t ts_us)
     {
@@ -119,8 +109,8 @@ int Cli::execute(const char* line, char* out, size_t len)
     if (!strcmp(cmd, "status")) { return cmd_status(argc, argv, out, len); }
     if (!strcmp(cmd, "dht"))    { return cmd_dht(argc, argv, out, len); }
     if (!strcmp(cmd, "water"))  { return cmd_water(argc, argv, out, len); }
-    if (!strcmp(cmd, "ph"))     { return cmd_ezo(_t.ph,  "ph",  argc, argv, out, len); }
-    if (!strcmp(cmd, "orp"))    { return cmd_ezo(_t.orp, "orp", argc, argv, out, len); }
+    if (!strcmp(cmd, "ph"))     { return cmd_ezo(_t.ph,  "ph",  "PH",  argc, argv, out, len); }
+    if (!strcmp(cmd, "orp"))    { return cmd_ezo(_t.orp, "orp", "ORP", argc, argv, out, len); }
     if (!strcmp(cmd, "wifi"))   { return cmd_wifi(argc, argv, out, len); }
     if (!strcmp(cmd, "mqtt"))   { return cmd_mqtt(argc, argv, out, len); }
     if (!strcmp(cmd, "queue"))  { return cmd_queue(argc, argv, out, len); }
@@ -252,7 +242,7 @@ int Cli::cmd_water(int argc, char** argv, char* out, size_t len)
     return error(out, len, "usage: water read|status|rom");
 }
 
-int Cli::cmd_ezo(EzoSensor* s, const char* name, int argc, char** argv, char* out, size_t len)
+int Cli::cmd_ezo(EzoSensor* s, const char* name, const char* id, int argc, char** argv, char* out, size_t len)
 {
     if (!s) { snprintf(out, len, "error: %s not present", name); return 1; }
     if (argc < 2)
@@ -330,6 +320,20 @@ int Cli::cmd_ezo(EzoSensor* s, const char* name, int argc, char** argv, char* ou
 
         int points = -1;
         { SensorLock lock; s->calibration_points(points); }   // best effort, for the reply
+
+        // Durable record of the calibration (POOL-10/11): the stamp keeps no
+        // history itself. Retained, so the server has the latest even after a
+        // restart. ts is left out when the clock isn't synced.
+        char leaf[40];
+        char when[32] = "";
+        char payload[96];
+        if (time_is_synced()) {
+            snprintf(when, sizeof(when), "\"ts\":%lld,", static_cast<long long>(time(nullptr)));
+        }
+        snprintf(leaf, sizeof(leaf), "calibration/%s", id);
+        snprintf(payload, sizeof(payload), "{%s\"cmd\":\"%s\",\"points\":%d}", when, args, points);
+        publish_sysinfo(_t.mqtt, _t.sysinfo_prefix, leaf, payload);
+
         snprintf(out, len, "%s calibrated %s points=%d", name, args, points);
         return 0;
     }
