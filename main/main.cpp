@@ -96,17 +96,17 @@ extern "C" void app_main() {
             ESP_LOGI("dht", "%.1f F  %.1f %%RH", c_to_f(d.temperature), d.humidity);
 
             snprintf(payload, sizeof(payload),
-                     "{\"schema\":1,\"seq\":%lu,\"id\":\"TMP\",\"v\":%.2f}",
+                     "{\"schema\":1,\"seq\":%lu,\"id\":\"ENC_T\",\"v\":%.2f}",
                      seq++, d.temperature);
             if (mqtt.publish(telemetry_topic, payload) != MqttClient::ReturnCode::OK) {
-                ESP_LOGW("main", "publish TMP failed");
+                ESP_LOGW("main", "publish ENC_T failed");
             }
 
             snprintf(payload, sizeof(payload),
-                     "{\"schema\":1,\"seq\":%lu,\"id\":\"HUM\",\"v\":%.2f}",
+                     "{\"schema\":1,\"seq\":%lu,\"id\":\"ENC_RH\",\"v\":%.2f}",
                      seq++, d.humidity);
             if (mqtt.publish(telemetry_topic, payload) != MqttClient::ReturnCode::OK) {
-                ESP_LOGW("main", "publish HUM failed");
+                ESP_LOGW("main", "publish ENC_RH failed");
             }
         } else {
             ESP_LOGW("dht", "sample failed, rc=%d", static_cast<int>(drc));
