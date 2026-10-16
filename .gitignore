@@ -22,3 +22,6 @@ docs/
 main/secrets.h
 managed_components/
 sdkconfig.old
+
+# host test binaries
+test/host/build/
