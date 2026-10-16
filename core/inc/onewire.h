@@ -1,41 +1,80 @@
 #ifndef ONEWIRE_H
 #define ONEWIRE_H
 
-#include <stdint.h>         // for uint32_t
+#include <stdint.h>         // for uint8_t, uint64_t
 #include "driver/gpio.h"    // for gpio_num_t
-#include <cmath>            // for NAN
-#include <vector>
+#include "esp_err.h"        // for esp_err_t
 
-#define ONEWIRE(pin) (*OneWire::Get(pin))
-#define ONEWIRE_WITH_PIN(pin,rom_id) (*OneWire::Get(pin,rom_id))
-
-
-namespace PM 
+/**
+ * @brief Bit-banged 1-Wire bus master on a single GPIO.
+ *
+ * One instance per GPIO; several devices can share the bus and are told apart
+ * by their 64-bit ROM ID. The ROM ID is stored as it comes off the wire: family
+ * code in the low byte, CRC in the high byte.
+ *
+ * Needs an external 4.7k pull-up to 3.3V. The internal pull-up is too weak on
+ * its own. Parasitic power is not supported.
+ */
+class OneWire
 {
-    class OneWire {
+public:
+    /**
+     * @brief Constructor for the OneWire class
+     * @param pin GPIO the bus data line is connected to
+     */
+    OneWire(gpio_num_t pin);
 
-    public:
-        void init();
-        static OneWire* Get(gpio_num_t pin);
-        static OneWire* Get(gpio_num_t pin, uint64_t rom_id);
+    /**
+     * @brief Configure the GPIO as open-drain input/output and release the bus.
+     * @return ESP_OK if successful, otherwise the gpio_config error
+     */
+    esp_err_t init();
 
-        gpio_num_t getPin() const;
-        uint64_t getROM() const;
-        bool reset();
-        void writeBit (bool bit);
-        void writeByte(uint8_t byte);
-        uint8_t readBit();
-        uint8_t readByte();
-    private:
-        gpio_num_t _pin;
-        uint64_t _rom = 0;
-        static inline std::vector<OneWire*> _instances = {};
+    /**
+     * @brief Send a reset pulse and check for a presence pulse.
+     * @return true if at least one device answered
+     */
+    bool reset();
 
-        explicit OneWire(gpio_num_t pin);
-        explicit OneWire(gpio_num_t pin, uint64_t rom_id);
-        ~OneWire();
+    /**
+     * @brief Reset the bus and address a single device (Match ROM).
+     *
+     * Any function command written after this goes only to that device.
+     *
+     * @param rom ROM ID of the device to address
+     * @return true if a device answered the reset, false if the bus is empty
+     */
+    bool select(uint64_t rom);
 
-    };
+    /**
+     * @brief Find the ROM IDs of all devices on the bus (Search ROM).
+     * @param roms Array that receives the ROM IDs found
+     * @param max_roms Size of the roms array
+     * @return Number of devices found (0 if none or on a bus error)
+     */
+    int search(uint64_t* roms, int max_roms);
 
-    #endif // ONEWIRE_H
-}
+    void write_byte(uint8_t byte);
+    uint8_t read_byte();
+
+    /**
+     * @brief Dallas/Maxim CRC-8, as used for ROM IDs and DS18B20 scratchpads.
+     * @param data Bytes to checksum
+     * @param len Number of bytes
+     * @return The CRC. Running it over data that includes its own CRC byte gives 0.
+     */
+    static uint8_t crc8(const uint8_t* data, int len);
+
+    gpio_num_t get_pin() const { return _pin; }
+
+    OneWire(const OneWire&) = delete;
+    OneWire& operator=(const OneWire&) = delete;
+
+private:
+    gpio_num_t _pin;            ///< GPIO of the bus data line
+
+    void write_bit(bool bit);
+    bool read_bit();
+};
+
+#endif // ONEWIRE_H
