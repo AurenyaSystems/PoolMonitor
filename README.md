@@ -1,75 +1,89 @@
-# Pool Monitoring System - ESP-IDF
+# PoolMonitor
 
-## Overview
-This project is a **pool monitoring system** built using **ESP-IDF** on an **ESP-based microcontroller**. The system integrates multiple sensors to measure key water quality parameters, including:
+ESP32 firmware for a solar-powered pool monitor. It measures water chemistry and temperature, watches the electronics enclosure, and publishes raw readings over MQTT to [pool-monitor-web](https://github.com/AurenyaSystems/pool-monitor-web), which stores them and does all derived maths (dew point, LSI, drift).
 
-- **pH Levels** (Estimated via sensor fusion)
-- **Chlorine Levels** (Estimated via sensor fusion)
-- **Turbidity** (Water clarity measurement using a light sensor)
-- **Water Temperature**
-- **Enclosure Humidity & Temperature** (Using a DHT sensor for system safety)
+Planning lives in Jira, project `POOL`. Ticket numbers in commits and branches refer to it.
 
-The goal is to use **sensor fusion**, combining different sensor readings to infer values for **pH and chlorine levels**, reducing the need for expensive dedicated sensors.
+## What it measures (v1)
 
-## Folder Structure
+| Reading | Sensor | ID | Unit |
+|---|---|---|---|
+| pH | Atlas Scientific EZO-pH on an ISCCB-2 isolated carrier, I2C | `PH` | pH |
+| ORP | Atlas Scientific EZO-ORP on an ISCCB-2 isolated carrier, I2C | `ORP` | mV |
+| Water temperature | DS18B20 waterproof probe, 1-Wire | `WATER_T` | °C |
+| Enclosure temperature | DHT22 | `ENC_T` | °C |
+| Enclosure humidity | DHT22 | `ENC_RH` | %RH |
+
+The water temperature is also passed to the pH stamp for temperature compensation. The stamp does the maths.
+
+Free chlorine by colorimetry is post-v1.
+
+## Wiring (generic ESP32 devkit, provisional)
+
+| Signal | GPIO | Notes |
+|---|---|---|
+| DHT22 data | 4 | external pull-up on the module |
+| DS18B20 data | 27 | **4.7 kΩ pull-up to 3.3 V**; external power, not parasitic |
+| I2C SDA | 21 | EZO-pH at `0x63`, EZO-ORP at `0x62` |
+| I2C SCL | 22 | 100 kHz |
+
+EZO stamps ship in UART mode. Switch them to I2C before connecting them.
+
+## Firmware layout
+
 ```
-project_root/
-│── application/         # High-level application logic
-│   ├── src/            # C++ source files
-│   ├── inc/            # Header files
-│── drivers/            # Custom drivers & sensor wrappers
-│   ├── src/            # C++ source files
-│   ├── inc/            # Header files
-│── main.cpp            # Entry point for the program
-│── CMakeLists.txt      # Build configuration
-│── sdkconfig           # ESP-IDF configuration file
+core/      bus code: bit-banged 1-Wire
+drivers/   one class per device (DHT, DS18B20, EZO, WiFi, MQTT) plus time sync
+           and the persistent seq counter
+app/       telemetry: sampler tasks -> reading queue -> transmitter (no ESP-IDF calls)
+main/      app_main: brings everything up and wires it together
 ```
 
-### **Folder Details:**
-- **application/** → Contains logic for managing data from sensors, processing measurements, and sending alerts.
-- **drivers/** → Houses both **custom drivers** and **wrappers** for ESP-IDF's built-in communication protocols (e.g., I2C, SPI, UART).
-- **main.cpp** → The entry point for the project, initializing sensors, handling FreeRTOS tasks, and managing data flow.
+- **Samplers:** each sensor has its own task and interval (30 min by default). A reading is only queued if the sample succeeded and the clock has been set by SNTP.
+- **Transmitter:** `app_main`'s loop drains the queue to MQTT every 60 s.
+- **Offline:** while the broker is unreachable, readings stay queued (up to 64; the oldest are dropped first).
 
-## **Sensor & Measurement Approach**
-### **1. Turbidity Sensor**  
-- Uses an **LED and a photodiode** to measure light transmission through water.  
-- Higher **light absorption** → **Dirtier water**.
+Power: automatic light sleep plus WiFi modem sleep, configured in `sdkconfig.defaults`.
 
-### **2. pH & Chlorine (Sensor Fusion Approach)**  
-Instead of using expensive dedicated sensors, the system estimates these values by combining:
-- **TDS (Total Dissolved Solids) Sensor**
-- **ORP (Oxidation-Reduction Potential) Sensor**
-- **Temperature & Conductivity Measurements**
-- **Colorimetric Analysis (Optional for Chlorine)**  
-  - Uses a **reagent-based approach** where a **specific wavelength LED** and a **photodiode** measure color change, correlating it to chlorine levels.
+## MQTT contract (POOL-38)
 
-### **3. Enclosure Monitoring (DHT Sensor)**  
-- Measures **humidity and temperature** inside the system's enclosure.
-- If humidity exceeds a **critical threshold**, the system **automatically shuts down** to prevent damage.
+| Topic | QoS | Retained | Payload |
+|---|---|---|---|
+| `pool/<device_id>/telemetry` | 1 | no | `{"schema":1,"seq":N,"id":"PH","ts":<epoch>,"v":7.42}` |
+| `pool/<device_id>/status` | 1 | yes | `online` / `offline` (LWT) |
 
-## **Development Approach**
-- **ESP-IDF** is used for core development, but **custom drivers** are implemented where possible to gain low-level control over hardware.
-- Communication protocols (I2C, SPI, UART) are managed through **wrappers**, keeping the application code flexible.
-- **FreeRTOS** is used to handle multitasking and efficient sensor polling.
+- **One message per reading.**
+- **Units:** SI, except ORP in mV. No units in the payload; the server maps IDs to units.
+- **`seq`:** persisted in NVS and never reused across reboots.
+- **`ts`:** when the reading was taken.
+- **`device_id`:** the factory MAC as 12 hex digits, unless `MQTT_DEVICE_ID` is set in `secrets.h`.
 
-## **Dependencies & Requirements**
-### **Software**
-- **ESP-IDF SDK** (Latest stable version)
-- **CMake** (For ESP-IDF build system)
-- **Python 3+** (For ESP-IDF tools)
+## Building
 
-### **Hardware**
-- **ESP-based microcontroller** (ESP32 recommended)
-- **Turbidity Sensor** (LED + Photodiode based)
-- **TDS Sensor** (To estimate dissolved solids)
-- **ORP Sensor** (To infer chlorine levels)
-- **DHT Sensor** (For enclosure monitoring)
-- **Reagent System (Optional for colorimetric analysis)**
+Uses ESP-IDF **v6.0.2**.
 
-## **Next Steps & Considerations**
-- **Optimize sensor fusion algorithms** for better pH & chlorine estimation.
-- **Automate reagent handling** for chlorine colorimetric analysis.
-- **Integrate wireless communication (Wi-Fi/Bluetooth) for remote monitoring.**
+1. Copy `main/secrets.h.example` to `main/secrets.h` and fill in WiFi and broker details. It's gitignored. `SNTP_SERVER` and `MQTT_DEVICE_ID` are optional.
+2. `idf.py build flash monitor`
 
-This README will be updated as the project evolves.
+> **Delete `sdkconfig` whenever `sdkconfig.defaults` changes.** The defaults only apply when `sdkconfig` is regenerated, and `idf.py fullclean` does not delete it. A stale `sdkconfig` without power management makes `esp_pm_configure()` fail and the board reboot-loop.
 
+## Bring-up checklist
+
+- **Boot log:**
+  - the DS18B20 ROM ID (`probe on GPIO 27: ROM ...`)
+  - each EZO info reply (`0x63: ?I,pH,...`)
+  - `first sync: <UTC> at uptime <ms>`
+- **Nothing is published before the first SNTP sync.** That's intentional.
+- **Readings arrive at the broker** within about a minute of being sampled, with consecutive `seq`.
+- **After a reboot,** `seq` continues instead of restarting.
+
+## Status
+
+Drivers for every v1 sensor, SNTP, the telemetry pipeline and WiFi backoff compile, but **most have not been validated on hardware yet**; see the POOL tickets in review. The DHT22 driver is hardware-validated.
+
+Still open:
+- How EZO calibrations are triggered and where calibration history is recorded (POOL-10)
+- RTC for offline boot (POOL-2)
+- Persistent buffering (POOL-3)
+- OTA (POOL-5)
+- Power characterisation (POOL-44)
